@@ -34,8 +34,9 @@ class XrayVpnService : VpnService() {
         const val STATE_DISCONNECTED = "Отключено"
         const val STATE_CONNECTING = "Подключение..."
         const val STATE_CONNECTED = "VPN подключён"
-        private const val ACTION_START = "com.fife.sa05.START"
-        private const val ACTION_STOP = "com.fife.sa05.STOP"
+        const val ACTION_START = "com.fife.sa05.START"
+        const val ACTION_STOP = "com.fife.sa05.STOP"
+        const val ACTION_RECONNECT = "com.fife.sa05.RECONNECT"
         private const val CHANNEL_ID = "xray_vpn"
         private const val NOTIFICATION_ID = 10
         private val _state = MutableStateFlow(STATE_DISCONNECTED)
@@ -49,6 +50,11 @@ class XrayVpnService : VpnService() {
         fun stop(context: Context) {
             context.startService(Intent(context, XrayVpnService::class.java).setAction(ACTION_STOP))
         }
+
+        fun reconnect(context: Context) {
+            val intent = Intent(context, XrayVpnService::class.java).setAction(ACTION_RECONNECT)
+            ContextCompat.startForegroundService(context, intent)
+        }
     }
 
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -56,6 +62,7 @@ class XrayVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private var xrayProcess: Process? = null
     private var tun2socksProcess: Process? = null
+    private var runningProfile: SubscriptionProfile? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -65,20 +72,24 @@ class XrayVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopTunnel()
-            ACTION_START -> {
-                startForegroundNow(STATE_CONNECTING)
-                startJob?.cancel()
-                startJob = scope.launch { startTunnel() }
-            }
+            ACTION_START, ACTION_RECONNECT -> beginStart()
         }
         return Service.START_NOT_STICKY
+    }
+
+    private fun beginStart() {
+        runningProfile = XrayPreferences.subscription(this).activeProfile
+        _state.value = STATE_CONNECTING
+        VpnRuntimeState.write(this, VpnRunStatus.CONNECTING, runningProfile)
+        startForegroundNow(STATE_CONNECTING, runningProfile)
+        startJob?.cancel()
+        startJob = scope.launch { startTunnel() }
     }
 
     private suspend fun startTunnel() {
         try {
             stopProcesses()
-            _state.value = STATE_CONNECTING
-            val rawConfig = XrayPreferences.config(this)
+            val rawConfig = runningProfile?.json ?: XrayPreferences.config(this)
             val validated = XrayConfig.validate(rawConfig)
             copyGeoAssets()
 
@@ -91,12 +102,16 @@ class XrayVpnService : VpnService() {
             tun = createTun()
             startTun2socks(tun!!, validated.socksPort)
             _state.value = STATE_CONNECTED
-            startForegroundNow(STATE_CONNECTED)
+            VpnRuntimeState.write(this, VpnRunStatus.CONNECTED, runningProfile)
+            startForegroundNow(STATE_CONNECTED, runningProfile)
         } catch (e: Exception) {
             Log.e("XrayVpnService", "Tunnel startup failed", e)
             _state.value = "Ошибка: ${e.message ?: e.javaClass.simpleName}"
-            startForegroundNow(_state.value)
             stopProcesses()
+            runningProfile = null
+            VpnRuntimeState.clear(this)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 
@@ -234,7 +249,9 @@ class XrayVpnService : VpnService() {
     private fun stopTunnel() {
         startJob?.cancel()
         stopProcesses()
+        runningProfile = null
         _state.value = STATE_DISCONNECTED
+        VpnRuntimeState.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -256,22 +273,53 @@ class XrayVpnService : VpnService() {
     override fun onDestroy() {
         stopProcesses()
         scope.cancel()
+        runningProfile = null
         _state.value = STATE_DISCONNECTED
+        VpnRuntimeState.clear(this)
         super.onDestroy()
     }
 
-    private fun startForegroundNow(text: String) {
+    private fun startForegroundNow(text: String, profile: SubscriptionProfile?) {
         val openApp = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val stopIntent = PendingIntent.getService(
+            this,
+            11,
+            Intent(this, XrayVpnService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val reconnectAction = Intent(this, XrayVpnService::class.java)
+            .setAction(ACTION_RECONNECT)
+        val reconnectIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(
+                this,
+                12,
+                reconnectAction,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        } else {
+            PendingIntent.getService(
+                this,
+                12,
+                reconnectAction,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
+        val profileName = profile?.remarks.orEmpty()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("SA05 Xray")
-            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_vpn_tile)
+            .setContentTitle(text)
+            .setContentText(profileName.ifBlank { "Локальный профиль" })
+            .setSubText("SA05 Xray")
             .setContentIntent(openApp)
+            .addAction(0, "Отключить", stopIntent)
+            .addAction(0, "Переподключить", reconnectIntent)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 34) {

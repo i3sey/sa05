@@ -11,6 +11,7 @@
         tools:ignore="QueryAllPackagesPermission" />
 
     <application
+        android:name=".Sa05Application"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -42,6 +43,23 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Xray proxy tunnel controlled by the user" />
+        </service>
+
+        <service
+            android:name=".VpnQuickSettingsTile"
+            android:exported="true"
+            android:icon="@drawable/ic_vpn_tile"
+            android:label="SA05 Xray"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="true" />
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
         </service>
     </application>
 

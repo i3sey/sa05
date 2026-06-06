@@ -5,6 +5,9 @@
 Minimal Android Xray client that accepts a full JSON config without rewriting
 its routing, balancers, VLESS, Reality, gRPC, or XHTTP settings.
 
+The primary source is one HTTPS subscription URL returning a JSON array of
+complete Xray configs. The selected profile is identified by `remarks`.
+
 ## Architecture
 
 1. `XrayVpnService` starts `libxray.so` with the saved JSON.
@@ -17,6 +20,11 @@ its routing, balancers, VLESS, Reality, gRPC, or XHTTP settings.
    its own TUN loop.
 7. The Hosts tab starts a separate temporary Xray process for one outbound,
    then performs an HTTP/HTTPS request through its local SOCKS inbound.
+8. Subscription refresh is performed at app startup and manually. A failed
+   refresh never replaces the last valid cached profile list.
+9. The foreground notification stores the actually running profile separately
+   from the currently selected profile. Quick Settings toggles the VPN and
+   reflects the persisted runtime state.
 
 ## Config contract
 
@@ -27,10 +35,8 @@ its routing, balancers, VLESS, Reality, gRPC, or XHTTP settings.
   - a valid numeric `"port"`
   - `"settings": { "udp": true }`
 - The saved config is never overwritten.
-- At runtime, legacy `"protocol":"hysteria"` with `settings.version=2` is
-  translated to the current Xray `hysteria2.settings.servers` shape. This is
-  required for the example config; current Xray does not accept the legacy
-  transport shape.
+- Provider Hysteria JSON is passed through unchanged. The bundled Xray fork
+  accepts `"protocol":"hysteria"` and rejects conversion to `"hysteria2"`.
 - `geoip.dat` and `geosite.dat` are copied from APK assets to `filesDir`.
 
 ## Native runtime
@@ -72,3 +78,11 @@ app/build/outputs/apk/debug/app-debug.apk
 - `QUERY_ALL_PACKAGES` is used only to populate the app-exclusion picker. A
   Play Store release would need to satisfy Google Play's restricted-permission
   policy or replace this with a narrower package discovery flow.
+- Subscription URL/config cache is excluded from Android cloud and device
+  transfer backup because URLs may contain access tokens.
+- Material You is user-configurable and enabled by default. Android 12+ uses
+  wallpaper colors; older systems and disabled dynamic color use the fallback
+  ocean/sand/coral palette.
+- Notification actions stop the current VPN or reconnect with the currently
+  selected profile. The Quick Settings tile opens the app's VPN permission
+  flow when Android authorization has not been granted yet.

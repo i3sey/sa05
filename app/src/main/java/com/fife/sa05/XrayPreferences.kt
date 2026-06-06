@@ -1,11 +1,15 @@
 package com.fife.sa05
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 
 object XrayPreferences {
     private const val FILE = "xray"
     private const val KEY_CONFIG = "config"
     private const val KEY_EXCLUDED = "excluded"
+    private const val KEY_SUBSCRIPTION = "subscription"
+    private const val KEY_DYNAMIC_COLOR = "dynamic_color"
 
     private val defaultConfig = """
         {
@@ -31,7 +35,9 @@ object XrayPreferences {
     """.trimIndent()
 
     fun config(context: Context): String =
-        prefs(context).getString(KEY_CONFIG, defaultConfig) ?: defaultConfig
+        subscription(context).activeProfile?.json
+            ?: prefs(context).getString(KEY_CONFIG, defaultConfig)
+            ?: defaultConfig
 
     fun excludedApps(context: Context): Set<String> =
         prefs(context).getStringSet(KEY_EXCLUDED, emptySet())?.toSet() ?: emptySet()
@@ -42,6 +48,74 @@ object XrayPreferences {
 
     fun saveExcludedApps(context: Context, value: Set<String>) {
         prefs(context).edit().putStringSet(KEY_EXCLUDED, value).apply()
+    }
+
+    fun dynamicColor(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DYNAMIC_COLOR, true)
+
+    fun saveDynamicColor(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DYNAMIC_COLOR, enabled).apply()
+    }
+
+    fun subscription(context: Context): SubscriptionState {
+        val raw = prefs(context).getString(KEY_SUBSCRIPTION, null) ?: return SubscriptionState()
+        return try {
+            val root = JSONObject(raw)
+            val profilesJson = root.optJSONArray("profiles") ?: JSONArray()
+            val profiles = (0 until profilesJson.length()).mapNotNull { index ->
+                profilesJson.optJSONObject(index)?.let {
+                    SubscriptionProfile(
+                        id = it.optString("id"),
+                        remarks = it.optString("remarks"),
+                        json = it.optString("json")
+                    )
+                }
+            }
+            val bypassJson = root.optJSONArray("suggestedBypassApps") ?: JSONArray()
+            SubscriptionState(
+                url = root.optString("url"),
+                title = root.optString("title"),
+                profiles = profiles,
+                activeProfileId = root.optString("activeProfileId"),
+                updatedAt = root.optLong("updatedAt"),
+                etag = root.optString("etag"),
+                userInfo = root.optString("userInfo"),
+                updateIntervalHours = root.optInt("updateIntervalHours", -1)
+                    .takeIf { it >= 0 },
+                suggestedBypassApps = (0 until bypassJson.length())
+                    .mapNotNull { bypassJson.optString(it).takeIf(String::isNotBlank) }
+                    .toSet()
+            )
+        } catch (_: Exception) {
+            SubscriptionState()
+        }
+    }
+
+    fun saveSubscription(context: Context, state: SubscriptionState) {
+        val profiles = JSONArray()
+        state.profiles.forEach {
+            profiles.put(
+                JSONObject()
+                    .put("id", it.id)
+                    .put("remarks", it.remarks)
+                    .put("json", it.json)
+            )
+        }
+        val bypass = JSONArray()
+        state.suggestedBypassApps.sorted().forEach(bypass::put)
+        val root = JSONObject()
+            .put("url", state.url)
+            .put("title", state.title)
+            .put("profiles", profiles)
+            .put("activeProfileId", state.activeProfileId)
+            .put("updatedAt", state.updatedAt)
+            .put("etag", state.etag)
+            .put("userInfo", state.userInfo)
+            .put("updateIntervalHours", state.updateIntervalHours ?: -1)
+            .put("suggestedBypassApps", bypass)
+        check(prefs(context).edit().putString(KEY_SUBSCRIPTION, root.toString()).commit()) {
+            "Не удалось сохранить подписку"
+        }
     }
 
     private fun prefs(context: Context) =

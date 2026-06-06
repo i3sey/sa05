@@ -56,7 +56,7 @@ class XrayConfigTest {
         assertEquals(3, hosts.size)
         assertEquals("one.example", hosts[0].address)
         assertEquals(8443, hosts[1].port)
-        assertEquals("hysteria2", hosts[2].protocol)
+        assertEquals("hysteria", hosts[2].protocol)
         assertEquals("hy.example", hosts[2].address)
     }
 
@@ -82,20 +82,21 @@ class XrayConfigTest {
     }
 
     @Test
-    fun pingConfigNormalizesLegacyHysteria2() {
+    fun pingConfigPreservesProviderHysteriaShape() {
         val host = XrayConfig.extractHosts(config)[2]
         val root = JSONObject(XrayConfig.buildPingConfig(config, host, 32124).runtimeJson)
         val outbound = root.getJSONArray("outbounds").getJSONObject(1)
 
-        assertEquals("hysteria2", outbound.getString("protocol"))
-        val server = outbound.getJSONObject("settings")
-            .getJSONArray("servers")
-            .getJSONObject(0)
-        assertEquals("hy.example", server.getString("address"))
-        assertEquals("secret", server.getString("password"))
+        assertEquals("hysteria", outbound.getString("protocol"))
+        val settings = outbound.getJSONObject("settings")
+        assertEquals("hy.example", settings.getString("address"))
+        assertEquals(2, settings.getInt("version"))
         val stream = outbound.getJSONObject("streamSettings")
-        assertFalse(stream.has("network"))
-        assertFalse(stream.has("hysteriaSettings"))
+        assertEquals("hysteria", stream.getString("network"))
+        assertEquals(
+            "secret",
+            stream.getJSONObject("hysteriaSettings").getString("auth")
+        )
         assertEquals("tls", stream.getString("security"))
     }
 

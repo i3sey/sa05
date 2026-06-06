@@ -45,7 +45,6 @@ object XrayConfig {
             if (!inbound.optJSONObject("settings")?.optBoolean("udp", false).orFalse()) {
                 throw IllegalArgumentException("Для VPN нужен settings.udp=true у SOCKS inbound")
             }
-            normalizeLegacyHysteria(root)
             return ValidatedXrayConfig(root.toString(2), port)
         }
         throw IllegalArgumentException("Нужен SOCKS inbound на 127.0.0.1")
@@ -82,7 +81,7 @@ object XrayConfig {
                     outboundIndex = outboundIndex,
                     endpointIndex = endpointIndex,
                     tag = tag,
-                    protocol = if (protocol == "hysteria") "hysteria2" else protocol,
+                    protocol = protocol,
                     address = address,
                     port = port
                 )
@@ -93,7 +92,6 @@ object XrayConfig {
 
     fun buildPingConfig(raw: String, host: XrayHost, socksPort: Int): XrayPingConfig {
         val root = parse(raw)
-        normalizeLegacyHysteria(root)
         val outbounds = root.optJSONArray("outbounds")
             ?: throw IllegalArgumentException("Нет массива outbounds")
         val selected = outbounds.optJSONObject(host.outboundIndex)
@@ -103,13 +101,17 @@ object XrayConfig {
         val endpointsKey = when {
             settings.optJSONArray("vnext") != null -> "vnext"
             settings.optJSONArray("servers") != null -> "servers"
+            selected.optString("protocol") == "hysteria" &&
+                settings.optInt("version") == 2 -> null
             else -> throw IllegalArgumentException("Не найден список серверов outbound")
         }
-        val endpoints = settings.optJSONArray(endpointsKey)
-            ?: throw IllegalArgumentException("Не найден endpoint outbound")
-        val endpoint = endpoints.optJSONObject(host.endpointIndex)
-            ?: throw IllegalArgumentException("Endpoint больше не существует")
-        settings.put(endpointsKey, JSONArray().put(JSONObject(endpoint.toString())))
+        if (endpointsKey != null) {
+            val endpoints = settings.optJSONArray(endpointsKey)
+                ?: throw IllegalArgumentException("Не найден endpoint outbound")
+            val endpoint = endpoints.optJSONObject(host.endpointIndex)
+                ?: throw IllegalArgumentException("Endpoint больше не существует")
+            settings.put(endpointsKey, JSONArray().put(JSONObject(endpoint.toString())))
+        }
 
         val targetTag = selected.optString("tag").ifBlank {
             "__ping_target".also { selected.put("tag", it) }
@@ -195,40 +197,6 @@ object XrayConfig {
             else -> 1L
         }
         return (amount * multiplier).coerceIn(1_000, 30_000).toInt()
-    }
-
-    internal fun normalizeLegacyHysteria(root: JSONObject) {
-        val outbounds = root.optJSONArray("outbounds") ?: return
-        for (index in 0 until outbounds.length()) {
-            val outbound = outbounds.optJSONObject(index) ?: continue
-            if (outbound.optString("protocol") != "hysteria") continue
-
-            val legacySettings = outbound.optJSONObject("settings") ?: continue
-            if (legacySettings.optInt("version", 0) != 2) continue
-            val address = legacySettings.optString("address")
-            val port = legacySettings.optInt("port", -1)
-            if (address.isBlank() || port !in 1..65535) {
-                throw IllegalArgumentException("Некорректный Hysteria v2 outbound")
-            }
-
-            val stream = outbound.optJSONObject("streamSettings")
-            val auth = stream
-                ?.optJSONObject("hysteriaSettings")
-                ?.optString("auth")
-                .orEmpty()
-            val server = JSONObject()
-                .put("address", address)
-                .put("port", port)
-            if (auth.isNotBlank()) server.put("password", auth)
-
-            outbound.put("protocol", "hysteria2")
-            outbound.put(
-                "settings",
-                JSONObject().put("servers", org.json.JSONArray().put(server))
-            )
-            stream?.remove("network")
-            stream?.remove("hysteriaSettings")
-        }
     }
 
     private fun Boolean?.orFalse() = this ?: false
