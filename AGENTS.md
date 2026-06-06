@@ -25,6 +25,11 @@ complete Xray configs. The selected profile is identified by `remarks`.
 9. The foreground notification stores the actually running profile separately
    from the currently selected profile. Quick Settings toggles the VPN and
    reflects the persisted runtime state.
+10. `sa05://add/<percent-encoded-https-url>` imports a subscription immediately.
+    Invalid or failed imports never replace the last valid cached subscription.
+11. Main-screen diagnostics probes Google, Yandex, and Telegram concurrently.
+    When the VPN is connected, probes use the actual running Xray SOCKS inbound;
+    otherwise they use the app's direct network path.
 
 ## Config contract
 
@@ -63,10 +68,14 @@ app/build/outputs/apk/debug/app-debug.apk
 ## Known limits
 
 - IPv4 TUN only.
-- No subscription/import URL support; paste JSON directly.
+- Subscription deep links require the nested HTTPS URL to be percent-encoded.
+- The main screen contains profile selection, refresh, VPN toggle, and settings.
+  Subscription editing, host ping, and app exclusions are under Settings.
 - App exclusions are applied when connecting. Reconnect after changing them.
 - Host ping uses `burstObservatory.pingConfig.destination`, then
   `observatory.probeUrl`, then `https://www.gstatic.com/generate_204`.
+- Restriction diagnostics use HTTPS time-to-first-byte rather than ICMP and
+  classify common allowlist and Telegram-blocking patterns.
 - Ping measures time from HTTP request write to the first response byte. It
   validates the selected protocol, authentication, Reality/TLS, and transport.
 - Only one host ping runs at a time; starting another cancels the previous

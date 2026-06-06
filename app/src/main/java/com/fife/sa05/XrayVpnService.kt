@@ -41,6 +41,8 @@ class XrayVpnService : VpnService() {
         private const val NOTIFICATION_ID = 10
         private val _state = MutableStateFlow(STATE_DISCONNECTED)
         val state = _state.asStateFlow()
+        private val _socksPort = MutableStateFlow<Int?>(null)
+        val socksPort = _socksPort.asStateFlow()
 
         fun start(context: Context) {
             val intent = Intent(context, XrayVpnService::class.java).setAction(ACTION_START)
@@ -91,6 +93,7 @@ class XrayVpnService : VpnService() {
             stopProcesses()
             val rawConfig = runningProfile?.json ?: XrayPreferences.config(this)
             val validated = XrayConfig.validate(rawConfig)
+            _socksPort.value = validated.socksPort
             copyGeoAssets()
 
             val configFile = File(filesDir, "config.json").apply {
@@ -107,6 +110,7 @@ class XrayVpnService : VpnService() {
         } catch (e: Exception) {
             Log.e("XrayVpnService", "Tunnel startup failed", e)
             _state.value = "Ошибка: ${e.message ?: e.javaClass.simpleName}"
+            _socksPort.value = null
             stopProcesses()
             runningProfile = null
             VpnRuntimeState.clear(this)
@@ -251,6 +255,7 @@ class XrayVpnService : VpnService() {
         stopProcesses()
         runningProfile = null
         _state.value = STATE_DISCONNECTED
+        _socksPort.value = null
         VpnRuntimeState.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -275,6 +280,7 @@ class XrayVpnService : VpnService() {
         scope.cancel()
         runningProfile = null
         _state.value = STATE_DISCONNECTED
+        _socksPort.value = null
         VpnRuntimeState.clear(this)
         super.onDestroy()
     }
