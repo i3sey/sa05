@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -38,9 +39,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -203,12 +206,20 @@ private fun XrayScreen(
     var pingJob by remember { mutableStateOf<Job?>(null) }
     var diagnosticResults by remember { mutableStateOf<List<DiagnosticResult>?>(null) }
     var diagnosticRunning by remember { mutableStateOf(false) }
+    var activeDiagnosticId by remember { mutableStateOf<String?>(null) }
     var diagnosticRoute by remember { mutableStateOf("") }
+    var selectedBackend by remember { mutableStateOf(XrayPreferences.vpnBackend(context)) }
+    var zapretPreset by remember { mutableStateOf(XrayPreferences.zapretPreset(context)) }
+    var customZapretArguments by remember {
+        mutableStateOf(XrayPreferences.zapretCustomArguments(context))
+    }
     val scope = rememberCoroutineScope()
     val pingEngine = remember { XrayPingEngine(context.applicationContext) }
     val diagnostics = remember { ConnectivityDiagnostics() }
     val vpnState by XrayVpnService.state.collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
+    val zapretAutoProgress by XrayVpnService.zapretAutoProgress.collectAsState()
+    val verificationMessage by XrayVpnService.verificationMessage.collectAsState()
     val importUrl by subscriptionImport.collectAsState()
 
     fun updateSubscription(url: String, imported: Boolean = false) {
@@ -271,7 +282,12 @@ private fun XrayScreen(
                     message = message,
                     diagnosticResults = diagnosticResults,
                     diagnosticRunning = diagnosticRunning,
+                    activeDiagnosticId = activeDiagnosticId,
                     diagnosticRoute = diagnosticRoute,
+                    zapretAutoProgress = zapretAutoProgress,
+                    verificationMessage = verificationMessage,
+                    selectedBackend = selectedBackend,
+                    zapretPreset = zapretPreset,
                     onRefresh = { updateSubscription(subscription.url) },
                     onSelect = { id ->
                         subscription = repository.setActiveProfile(id)
@@ -286,21 +302,89 @@ private fun XrayScreen(
                             XrayVpnService.stop(context)
                         }
                     },
+                    onSelectBackend = { backend ->
+                        if (backend != selectedBackend) {
+                            selectedBackend = backend
+                            XrayPreferences.saveVpnBackend(context, backend)
+                            if (vpnState != XrayVpnService.STATE_DISCONNECTED) {
+                                XrayVpnService.reconnect(context)
+                            }
+                        }
+                    },
+                    onSelectZapretPreset = { preset ->
+                        if (preset != zapretPreset) {
+                            zapretPreset = preset
+                            XrayPreferences.saveZapretPreset(context, preset)
+                            if (selectedBackend == VpnBackend.ZAPRET &&
+                                vpnState != XrayVpnService.STATE_DISCONNECTED
+                            ) {
+                                XrayVpnService.reconnect(context)
+                            }
+                        }
+                    },
+                    onRetryZapretAuto = {
+                        XrayPreferences.clearZapretAutoCache(context)
+                        message = if (selectedBackend == VpnBackend.ZAPRET &&
+                            vpnState != XrayVpnService.STATE_DISCONNECTED
+                        ) {
+                            XrayVpnService.reconnect(context)
+                            "Повторный подбор стратегии..."
+                        } else {
+                            "Подбор выполнится при подключении"
+                        }
+                    },
                     onRunDiagnostics = {
                         if (!diagnosticRunning) {
                             diagnosticRunning = true
-                            diagnosticResults = null
-                            val port = activeSocksPort
-                                .takeIf { vpnState == XrayVpnService.STATE_CONNECTED }
-                            diagnosticRoute = if (port != null) "через VPN" else "напрямую"
+                            diagnosticResults = emptyList()
+                            activeDiagnosticId = ConnectivityDiagnostics.targets.first().id
+                            val throughVpn = vpnState == XrayVpnService.STATE_CONNECTED
+                            diagnosticRoute = if (throughVpn) {
+                                "backend; TUN активен · " +
+                                    VpnRuntimeState.read(context).backend.title
+                            } else {
+                                "прямое соединение"
+                            }
                             scope.launch {
                                 try {
-                                    diagnosticResults = diagnostics.run(port)
+                                    val onResult: suspend (DiagnosticResult) -> Unit = { result ->
+                                            diagnosticResults =
+                                                diagnosticResults.orEmpty() + result
+                                            val completed = diagnosticResults.orEmpty().size
+                                            activeDiagnosticId =
+                                                ConnectivityDiagnostics.targets
+                                                    .getOrNull(completed)?.id
+                                    }
+                                    diagnosticResults = if (throughVpn) {
+                                        val backend = VpnRuntimeState.read(context).backend
+                                        diagnostics.runSocks(
+                                            activeSocksPort
+                                                ?: error("SOCKS-порт VPN недоступен"),
+                                            resolveForSocks = backend == VpnBackend.ZAPRET,
+                                            targetsToTest = ConnectivityDiagnostics.targets,
+                                            onResult = onResult
+                                        )
+                                    } else {
+                                        diagnostics.runDirect(
+                                            ConnectivityDiagnostics.targets,
+                                            onResult
+                                        )
+                                    }
                                 } finally {
                                     diagnosticRunning = false
+                                    activeDiagnosticId = null
                                 }
                             }
                         }
+                    },
+                    onOpenTarget = { target ->
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target.url))
+                        val browserPackage = intent.resolveActivity(context.packageManager)
+                            ?.packageName
+                        if (browserPackage != null && browserPackage in selectedApps) {
+                            message = "Браузер исключён из VPN и откроет сайт напрямую"
+                        }
+                        context.startActivity(intent)
                     },
                     onSettings = { screen = AppScreen.SETTINGS }
                 )
@@ -309,10 +393,25 @@ private fun XrayScreen(
                     url = urlDraft,
                     updating = updating,
                     dynamicColor = dynamicColor,
+                    customZapretArguments = customZapretArguments,
                     onBack = { screen = AppScreen.MAIN },
                     onUrlChanged = { urlDraft = it },
                     onUpdate = { updateSubscription(urlDraft) },
                     onDynamicColorChanged = onDynamicColorChanged,
+                    onCustomZapretArgumentsChanged = {
+                        customZapretArguments = it
+                    },
+                    onSaveCustomZapretArguments = {
+                        try {
+                            XrayPreferences.saveZapretCustomArguments(
+                                context,
+                                customZapretArguments
+                            )
+                            message = "Параметры ByeDPI сохранены"
+                        } catch (e: IllegalArgumentException) {
+                            message = e.message ?: "Некорректные параметры ByeDPI"
+                        }
+                    },
                     onHosts = { screen = AppScreen.HOSTS },
                     onExclusions = { screen = AppScreen.EXCLUSIONS }
                 )
@@ -390,40 +489,83 @@ private fun ColumnScope.MainScreen(
     message: String,
     diagnosticResults: List<DiagnosticResult>?,
     diagnosticRunning: Boolean,
+    activeDiagnosticId: String?,
     diagnosticRoute: String,
+    zapretAutoProgress: ZapretAutoProgress,
+    verificationMessage: String,
+    selectedBackend: VpnBackend,
+    zapretPreset: ZapretPreset,
     onRefresh: () -> Unit,
     onSelect: (String) -> Unit,
     onToggleVpn: () -> Unit,
+    onSelectBackend: (VpnBackend) -> Unit,
+    onSelectZapretPreset: (ZapretPreset) -> Unit,
+    onRetryZapretAuto: () -> Unit,
     onRunDiagnostics: () -> Unit,
+    onOpenTarget: (DiagnosticTarget) -> Unit,
     onSettings: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
     val runtime = remember(vpnState) { VpnRuntimeState.read(context) }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                subscription.title.ifBlank { "SA05 XRAY" },
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Text(vpnState, color = MaterialTheme.colorScheme.primary)
-            if (runtime.profileName.isNotBlank() &&
-                runtime.status != VpnRunStatus.DISCONNECTED
-            ) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    runtime.profileName,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    subscription.title.ifBlank { "SA05" },
+                    style = MaterialTheme.typography.headlineMedium
                 )
+                Text(
+                    vpnState,
+                    color = if (vpnState.startsWith("Ошибка")) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    style = MaterialTheme.typography.titleMedium
+                )
+                if (runtime.profileName.isNotBlank() &&
+                    runtime.status != VpnRunStatus.DISCONNECTED
+                ) {
+                    Text(
+                        runtime.profileName,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            IconButton(onClick = onSettings) {
+                Icon(painterResource(R.drawable.ic_settings), contentDescription = "Настройки")
             }
         }
-        IconButton(onClick = onSettings) {
-            Icon(painterResource(R.drawable.ic_settings), contentDescription = "Настройки")
+    }
+    Spacer(Modifier.height(14.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        VpnBackend.entries.forEach { backend ->
+            val selected = backend == selectedBackend
+            if (selected) {
+                Button(
+                    onClick = { onSelectBackend(backend) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(backend.title)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelectBackend(backend) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(backend.title)
+                }
+            }
         }
     }
-    Spacer(Modifier.height(20.dp))
+    Spacer(Modifier.height(12.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -432,17 +574,26 @@ private fun ColumnScope.MainScreen(
         ExposedDropdownMenuBox(
             expanded = menuExpanded,
             onExpandedChange = {
-                if (subscription.profiles.isNotEmpty()) menuExpanded = !menuExpanded
+                val enabled = selectedBackend == VpnBackend.ZAPRET ||
+                    subscription.profiles.isNotEmpty()
+                if (enabled) menuExpanded = !menuExpanded
             },
             modifier = Modifier.weight(1f)
         ) {
             OutlinedTextField(
-                value = subscription.activeProfile?.remarks.orEmpty(),
+                value = if (selectedBackend == VpnBackend.XRAY) {
+                    subscription.activeProfile?.remarks.orEmpty()
+                } else {
+                    zapretPreset.title
+                },
                 onValueChange = {},
                 readOnly = true,
-                enabled = subscription.profiles.isNotEmpty(),
+                enabled = selectedBackend == VpnBackend.ZAPRET ||
+                    subscription.profiles.isNotEmpty(),
                 singleLine = true,
-                label = { Text("Профиль") },
+                label = {
+                    Text(if (selectedBackend == VpnBackend.XRAY) "Профиль" else "Стратегия")
+                },
                 trailingIcon = {
                     ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuExpanded)
                 },
@@ -454,32 +605,83 @@ private fun ColumnScope.MainScreen(
                 expanded = menuExpanded,
                 onDismissRequest = { menuExpanded = false }
             ) {
-                subscription.profiles.forEach { profile ->
-                    DropdownMenuItem(
-                        text = { Text(profile.remarks) },
-                        onClick = {
-                            onSelect(profile.id)
-                            menuExpanded = false
-                        }
-                    )
+                if (selectedBackend == VpnBackend.XRAY) {
+                    subscription.profiles.forEach { profile ->
+                        DropdownMenuItem(
+                            text = { Text(profile.remarks) },
+                            onClick = {
+                                onSelect(profile.id)
+                                menuExpanded = false
+                            }
+                        )
+                    }
+                } else {
+                    ZapretPreset.selectable.forEach { preset ->
+                        DropdownMenuItem(
+                            text = { Text(preset.title) },
+                            onClick = {
+                                onSelectZapretPreset(preset)
+                                menuExpanded = false
+                            }
+                        )
+                    }
                 }
             }
         }
         IconButton(
-            onClick = onRefresh,
-            enabled = subscription.url.isNotBlank() && !updating
+            onClick = {
+                if (selectedBackend == VpnBackend.XRAY) onRefresh()
+                else onRetryZapretAuto()
+            },
+            enabled = if (selectedBackend == VpnBackend.XRAY) {
+                subscription.url.isNotBlank() && !updating
+            } else {
+                zapretPreset == ZapretPreset.AUTO
+            }
         ) {
-            if (updating) {
+            if (selectedBackend == VpnBackend.XRAY && updating) {
                 CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
             } else {
                 Icon(
                     painterResource(R.drawable.ic_refresh),
-                    contentDescription = "Обновить подписку"
+                    contentDescription = if (selectedBackend == VpnBackend.XRAY) {
+                        "Обновить подписку"
+                    } else {
+                        "Повторить подбор стратегии"
+                    }
                 )
             }
         }
     }
     Spacer(Modifier.height(18.dp))
+    if (zapretAutoProgress.running) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp)) {
+                Text(
+                    "Подбор ByeDPI ${zapretAutoProgress.tested + 1}/${zapretAutoProgress.total}",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    listOf(zapretAutoProgress.preset, zapretAutoProgress.target)
+                        .filter(String::isNotBlank)
+                        .joinToString(" · "),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+    if (verificationMessage.isNotBlank()) {
+        Text(
+            verificationMessage,
+            color = if (verificationMessage.contains("не подтверждён")) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(bottom = 10.dp)
+        )
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Row(
@@ -491,7 +693,7 @@ private fun ColumnScope.MainScreen(
                     Text("Проверка ограничений", style = MaterialTheme.typography.titleMedium)
                     Text(
                         if (diagnosticRoute.isBlank()) {
-                            "Google, Яндекс и Telegram"
+                            "Последовательная HTTPS-проверка"
                         } else {
                             "Маршрут: $diagnosticRoute"
                         },
@@ -510,30 +712,68 @@ private fun ColumnScope.MainScreen(
                     }
                 }
             }
-            diagnosticResults?.let { results ->
+            if (diagnosticResults != null || diagnosticRunning) {
+                val results = diagnosticResults.orEmpty()
                 HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                results.forEach { result ->
+                ConnectivityDiagnostics.targets.forEach { target ->
+                    val result = results.firstOrNull { it.target.id == target.id }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(result.target.label)
-                        Text(
-                            if (result.reachable) "✓" else "✕",
-                            color = if (result.reachable) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            },
-                            style = MaterialTheme.typography.titleLarge
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(target.label)
+                            if (result != null &&
+                                result.status != DiagnosticStatus.SUCCESS &&
+                                result.error.isNotBlank()
+                            ) {
+                                Text(
+                                    result.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        TextButton(onClick = { onOpenTarget(target) }) {
+                            Text("Открыть")
+                        }
+                        when {
+                            activeDiagnosticId == target.id -> CircularProgressIndicator(
+                                Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                            result != null -> Text(
+                                when (result.status) {
+                                    DiagnosticStatus.SUCCESS -> "✓"
+                                    DiagnosticStatus.FAILED -> "✕"
+                                    DiagnosticStatus.INCONCLUSIVE -> "!"
+                                },
+                                color = when (result.status) {
+                                    DiagnosticStatus.SUCCESS ->
+                                        MaterialTheme.colorScheme.primary
+                                    DiagnosticStatus.FAILED ->
+                                        MaterialTheme.colorScheme.error
+                                    DiagnosticStatus.INCONCLUSIVE ->
+                                        MaterialTheme.colorScheme.tertiary
+                                },
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                            else -> Text(
+                                "·",
+                                color = MaterialTheme.colorScheme.outline,
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                        }
                     }
                 }
-                Text(
-                    ConnectivityDiagnosis.describe(results),
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
+                if (!diagnosticRunning && results.isNotEmpty()) {
+                    Text(
+                        ConnectivityDiagnosis.describe(results),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
             }
         }
     }
@@ -581,10 +821,13 @@ private fun ColumnScope.SettingsScreen(
     url: String,
     updating: Boolean,
     dynamicColor: Boolean,
+    customZapretArguments: String,
     onBack: () -> Unit,
     onUrlChanged: (String) -> Unit,
     onUpdate: () -> Unit,
     onDynamicColorChanged: (Boolean) -> Unit,
+    onCustomZapretArgumentsChanged: (String) -> Unit,
+    onSaveCustomZapretArguments: () -> Unit,
     onHosts: () -> Unit,
     onExclusions: () -> Unit
 ) {
@@ -594,6 +837,7 @@ private fun ColumnScope.SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
+                Text("Подписка", style = MaterialTheme.typography.titleLarge)
                 OutlinedTextField(
                     value = url,
                     onValueChange = onUrlChanged,
@@ -607,6 +851,25 @@ private fun ColumnScope.SettingsScreen(
                     modifier = Modifier.padding(top = 8.dp)
                 ) {
                     Text(if (updating) "Обновление..." else "Применить")
+                }
+            }
+            item {
+                Text("ByeDPI", style = MaterialTheme.typography.titleLarge)
+                OutlinedTextField(
+                    value = customZapretArguments,
+                    onValueChange = onCustomZapretArgumentsChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    label = { Text("Свои параметры") },
+                    supportingText = {
+                        Text("Используются при выборе стратегии «Свои параметры»")
+                    }
+                )
+                OutlinedButton(
+                    onClick = onSaveCustomZapretArguments,
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text("Сохранить параметры")
                 }
             }
             item { SettingsLink("Хосты", "Пинг outbound-подключений", onHosts) }
@@ -758,8 +1021,24 @@ private fun AppExclusionList(
     onToggle: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var query by remember { mutableStateOf("") }
+    val visibleApps = remember(apps, query) {
+        if (query.isBlank()) apps else apps.filter {
+            it.label.contains(query, ignoreCase = true) ||
+                it.packageName.contains(query, ignoreCase = true)
+        }
+    }
     Column(modifier.padding(top = 8.dp)) {
-        Text("Отмеченные приложения идут напрямую, вне VPN.")
+        Text("Выбрано: ${selected.size}. Изменения применятся после переподключения.")
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            singleLine = true,
+            label = { Text("Поиск приложений") }
+        )
         if (suggested.isNotEmpty() && !selected.containsAll(suggested)) {
             Button(
                 onClick = onImportSuggested,
@@ -770,7 +1049,7 @@ private fun AppExclusionList(
         }
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         LazyColumn {
-            items(apps, key = { it.packageName }) { app ->
+            items(visibleApps, key = { it.packageName }) { app ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

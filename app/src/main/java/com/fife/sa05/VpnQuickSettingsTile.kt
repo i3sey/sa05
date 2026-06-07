@@ -33,8 +33,14 @@ class VpnQuickSettingsTile : TileService() {
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
         if (VpnService.prepare(this) == null && !notificationDenied) {
-            val selected = XrayPreferences.subscription(this).activeProfile
-            VpnRuntimeState.write(this, VpnRunStatus.CONNECTING, selected)
+            val backend = XrayPreferences.vpnBackend(this)
+            val selected = selectedLabel(backend)
+            VpnRuntimeState.write(
+                this,
+                VpnRunStatus.CONNECTING,
+                backend,
+                profileName = selected
+            )
             renderTile(VpnRuntimeState.read(this))
             XrayVpnService.start(this)
         } else {
@@ -48,13 +54,14 @@ class VpnQuickSettingsTile : TileService() {
 
     private fun renderTile(runtime: VpnRuntimeSnapshot) {
         val tile = qsTile ?: return
-        val selected = XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
+        val backend = XrayPreferences.vpnBackend(this)
+        val selected = selectedLabel(backend)
         tile.state = when (runtime.status) {
             VpnRunStatus.CONNECTED -> Tile.STATE_ACTIVE
             VpnRunStatus.CONNECTING -> Tile.STATE_ACTIVE
             VpnRunStatus.DISCONNECTED -> Tile.STATE_INACTIVE
         }
-        tile.label = "SA05 Xray"
+        tile.label = "SA05 VPN"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = when (runtime.status) {
                 VpnRunStatus.CONNECTED -> runtime.profileName.ifBlank { "Подключено" }
@@ -68,6 +75,13 @@ class VpnQuickSettingsTile : TileService() {
             VpnRunStatus.DISCONNECTED -> "VPN отключён"
         }
         tile.updateTile()
+    }
+
+    private fun selectedLabel(backend: VpnBackend): String = when (backend) {
+        VpnBackend.XRAY ->
+            XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
+                .ifBlank { "Xray" }
+        VpnBackend.ZAPRET -> XrayPreferences.zapretPreset(this).title
     }
 
     @SuppressLint("StartActivityAndCollapseDeprecated")

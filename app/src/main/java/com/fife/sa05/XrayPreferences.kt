@@ -10,6 +10,13 @@ object XrayPreferences {
     private const val KEY_EXCLUDED = "excluded"
     private const val KEY_SUBSCRIPTION = "subscription"
     private const val KEY_DYNAMIC_COLOR = "dynamic_color"
+    private const val KEY_VPN_BACKEND = "vpn_backend"
+    private const val KEY_ZAPRET_PRESET = "zapret_preset"
+    private const val KEY_ZAPRET_CACHE_NETWORK = "zapret_cache_network"
+    private const val KEY_ZAPRET_CACHE_PRESET = "zapret_cache_preset"
+    private const val KEY_ZAPRET_CACHE_SCORE = "zapret_cache_score"
+    private const val KEY_ZAPRET_CACHE_VERSION = "zapret_cache_version"
+    private const val KEY_ZAPRET_CUSTOM_ARGUMENTS = "zapret_custom_arguments"
 
     private val defaultConfig = """
         {
@@ -55,6 +62,67 @@ object XrayPreferences {
 
     fun saveDynamicColor(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_DYNAMIC_COLOR, enabled).apply()
+    }
+
+    fun vpnBackend(context: Context): VpnBackend =
+        runCatching {
+            VpnBackend.valueOf(
+                prefs(context).getString(KEY_VPN_BACKEND, VpnBackend.XRAY.name)
+                    ?: VpnBackend.XRAY.name
+            )
+        }.getOrDefault(VpnBackend.XRAY)
+
+    fun saveVpnBackend(context: Context, backend: VpnBackend) {
+        prefs(context).edit().putString(KEY_VPN_BACKEND, backend.name).apply()
+        VpnRuntimeState.requestTileRefresh(context)
+    }
+
+    fun zapretPreset(context: Context): ZapretPreset =
+        ZapretPreset.fromName(prefs(context).getString(KEY_ZAPRET_PRESET, null))
+
+    fun saveZapretPreset(context: Context, preset: ZapretPreset) {
+        prefs(context).edit().putString(KEY_ZAPRET_PRESET, preset.name).apply()
+        VpnRuntimeState.requestTileRefresh(context)
+    }
+
+    fun zapretCustomArguments(context: Context): String =
+        prefs(context).getString(KEY_ZAPRET_CUSTOM_ARGUMENTS, "").orEmpty()
+
+    fun saveZapretCustomArguments(context: Context, value: String) {
+        ZapretArguments.parse(value)
+        prefs(context).edit().putString(KEY_ZAPRET_CUSTOM_ARGUMENTS, value.trim()).apply()
+    }
+
+    fun zapretAutoCache(context: Context): ZapretAutoCache? {
+        val preferences = prefs(context)
+        val network = preferences.getString(KEY_ZAPRET_CACHE_NETWORK, "").orEmpty()
+        if (network.isBlank()) return null
+        return ZapretAutoCache(
+            networkKey = network,
+            preset = ZapretPreset.fromName(
+                preferences.getString(KEY_ZAPRET_CACHE_PRESET, null)
+            ).takeUnless { it == ZapretPreset.AUTO } ?: return null,
+            reachableCount = preferences.getInt(KEY_ZAPRET_CACHE_SCORE, 0),
+            algorithmVersion = preferences.getInt(KEY_ZAPRET_CACHE_VERSION, 0)
+        )
+    }
+
+    fun saveZapretAutoCache(context: Context, cache: ZapretAutoCache) {
+        prefs(context).edit()
+            .putString(KEY_ZAPRET_CACHE_NETWORK, cache.networkKey)
+            .putString(KEY_ZAPRET_CACHE_PRESET, cache.preset.name)
+            .putInt(KEY_ZAPRET_CACHE_SCORE, cache.reachableCount)
+            .putInt(KEY_ZAPRET_CACHE_VERSION, cache.algorithmVersion)
+            .apply()
+    }
+
+    fun clearZapretAutoCache(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_ZAPRET_CACHE_NETWORK)
+            .remove(KEY_ZAPRET_CACHE_PRESET)
+            .remove(KEY_ZAPRET_CACHE_SCORE)
+            .remove(KEY_ZAPRET_CACHE_VERSION)
+            .apply()
     }
 
     fun subscription(context: Context): SubscriptionState {

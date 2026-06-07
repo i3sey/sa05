@@ -7,11 +7,11 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.net.VpnService
 import android.os.Build
-import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -25,6 +25,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -39,10 +42,17 @@ class XrayVpnService : VpnService() {
         const val ACTION_RECONNECT = "com.fife.sa05.RECONNECT"
         private const val CHANNEL_ID = "xray_vpn"
         private const val NOTIFICATION_ID = 10
+        private const val ZAPRET_SOCKS_PORT = 10810
+        private const val ZAPRET_BRIDGE_PORT = 10811
+        private const val ZAPRET_AUTO_ALGORITHM_VERSION = 4
         private val _state = MutableStateFlow(STATE_DISCONNECTED)
         val state = _state.asStateFlow()
         private val _socksPort = MutableStateFlow<Int?>(null)
         val socksPort = _socksPort.asStateFlow()
+        private val _zapretAutoProgress = MutableStateFlow(ZapretAutoProgress())
+        val zapretAutoProgress = _zapretAutoProgress.asStateFlow()
+        private val _verificationMessage = MutableStateFlow("")
+        val verificationMessage = _verificationMessage.asStateFlow()
 
         fun start(context: Context) {
             val intent = Intent(context, XrayVpnService::class.java).setAction(ACTION_START)
@@ -62,9 +72,15 @@ class XrayVpnService : VpnService() {
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var startJob: Job? = null
     private var tun: ParcelFileDescriptor? = null
-    private var xrayProcess: Process? = null
+    private var proxyProcess: Process? = null
+    private var bridgeProcess: Process? = null
     private var tun2socksProcess: Process? = null
+    private var runningBackend = VpnBackend.XRAY
     private var runningProfile: SubscriptionProfile? = null
+    private var runningLabel = ""
+    private val startGeneration = AtomicLong()
+    private val startMutex = Mutex()
+    private data class BackendStart(val socksPort: Int, val tunnelReady: Boolean = false)
 
     override fun onCreate() {
         super.onCreate()
@@ -80,48 +96,308 @@ class XrayVpnService : VpnService() {
     }
 
     private fun beginStart() {
+        runningBackend = XrayPreferences.vpnBackend(this)
         runningProfile = XrayPreferences.subscription(this).activeProfile
+            .takeIf { runningBackend == VpnBackend.XRAY }
+        runningLabel = selectedLabel()
         _state.value = STATE_CONNECTING
-        VpnRuntimeState.write(this, VpnRunStatus.CONNECTING, runningProfile)
-        startForegroundNow(STATE_CONNECTING, runningProfile)
+        writeRuntime(VpnRunStatus.CONNECTING)
+        startForegroundNow(STATE_CONNECTING)
         startJob?.cancel()
-        startJob = scope.launch { startTunnel() }
+        val generation = startGeneration.incrementAndGet()
+        startJob = scope.launch { startTunnel(generation) }
     }
 
-    private suspend fun startTunnel() {
-        try {
-            stopProcesses()
-            val rawConfig = runningProfile?.json ?: XrayPreferences.config(this)
-            val validated = XrayConfig.validate(rawConfig)
-            _socksPort.value = validated.socksPort
-            copyGeoAssets()
-
-            val configFile = File(filesDir, "config.json").apply {
-                writeText(validated.runtimeJson)
+    private suspend fun startTunnel(generation: Long) {
+        startMutex.withLock {
+            try {
+                stopProcesses()
+                val backend = when (runningBackend) {
+                    VpnBackend.XRAY -> BackendStart(startXrayBackend())
+                    VpnBackend.ZAPRET -> startZapretBackend()
+                }
+                check(generation == startGeneration.get()) { "Запуск отменён" }
+                _socksPort.value = backend.socksPort
+                if (!backend.tunnelReady) {
+                    tun = createTun()
+                    startTun2socks(tun!!, backend.socksPort)
+                }
+                check(generation == startGeneration.get()) { "Запуск отменён" }
+                _state.value = STATE_CONNECTED
+                writeRuntime(VpnRunStatus.CONNECTED)
+                startForegroundNow(STATE_CONNECTED)
+                if (runningBackend != VpnBackend.ZAPRET ||
+                    XrayPreferences.zapretPreset(this) != ZapretPreset.AUTO
+                ) {
+                    verifyRunningTunnel()
+                }
+            } catch (e: Exception) {
+                if (generation != startGeneration.get()) return@withLock
+                Log.e("XrayVpnService", "Tunnel startup failed", e)
+                _state.value = "Ошибка: ${e.message ?: e.javaClass.simpleName}"
+                _socksPort.value = null
+                _zapretAutoProgress.value = ZapretAutoProgress(
+                    message = e.message ?: "Ошибка запуска"
+                )
+                stopProcesses()
+                runningProfile = null
+                runningLabel = ""
+                VpnRuntimeState.clear(this)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
             }
-            startXray(configFile)
-            waitForPort(validated.socksPort, 10_000)
+        }
+    }
 
-            tun = createTun()
-            startTun2socks(tun!!, validated.socksPort)
-            _state.value = STATE_CONNECTED
-            VpnRuntimeState.write(this, VpnRunStatus.CONNECTED, runningProfile)
-            startForegroundNow(STATE_CONNECTED, runningProfile)
-        } catch (e: Exception) {
-            Log.e("XrayVpnService", "Tunnel startup failed", e)
-            _state.value = "Ошибка: ${e.message ?: e.javaClass.simpleName}"
-            _socksPort.value = null
-            stopProcesses()
-            runningProfile = null
-            VpnRuntimeState.clear(this)
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+    private suspend fun startXrayBackend(): Int {
+        val rawConfig = runningProfile?.json ?: XrayPreferences.config(this)
+        val validated = XrayConfig.validate(rawConfig)
+        copyGeoAssets()
+        val configFile = File(filesDir, "config.json").apply {
+            writeText(validated.runtimeJson)
+        }
+        val binary = File(applicationInfo.nativeLibraryDir, "libxray.so")
+        check(binary.exists()) { "libxray.so не найден" }
+        proxyProcess = ProcessBuilder(
+            binary.absolutePath,
+            "run",
+            "-config",
+            configFile.absolutePath
+        )
+            .directory(filesDir)
+            .redirectErrorStream(true)
+            .apply { environment()["XRAY_LOCATION_ASSET"] = filesDir.absolutePath }
+            .start()
+        pipeLogs("xray", proxyProcess!!)
+        waitForPort(proxyProcess!!, validated.socksPort, 10_000)
+        return validated.socksPort
+    }
+
+    private suspend fun startZapretBackend(): BackendStart {
+        val selected = XrayPreferences.zapretPreset(this)
+        if (selected == ZapretPreset.AUTO) {
+            val resolved = resolveAutoPreset()
+            runningLabel = "Авто → ${resolved.title}"
+            _zapretAutoProgress.value = ZapretAutoProgress(
+                message = "Backend проверен, TUN запущен"
+            )
+            _verificationMessage.value =
+                "Backend проверен, TUN запущен; проверьте сайт кнопкой «Открыть»"
+            return BackendStart(ZAPRET_BRIDGE_PORT, tunnelReady = true)
+        }
+        runningLabel = selected.title
+        _zapretAutoProgress.value = ZapretAutoProgress()
+        proxyProcess = createZapretProcess(selected)
+        pipeLogs("ByeDPI", proxyProcess!!)
+        waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 5_000)
+        startZapretBridge()
+        return BackendStart(ZAPRET_BRIDGE_PORT)
+    }
+
+    private suspend fun resolveAutoPreset(): ZapretPreset {
+        val networkKey = networkKey()
+        val diagnostics = ConnectivityDiagnostics()
+        _zapretAutoProgress.value = ZapretAutoProgress(
+            running = true,
+            preset = "Прямая сеть",
+            message = "Проверяем, нужен ли обход"
+        )
+        startForegroundNow("Проверка прямой сети")
+        val directResults = diagnostics.runDirect(
+            targetsToTest = ConnectivityDiagnostics.autoTargets,
+            onResult = { result ->
+                _zapretAutoProgress.value = _zapretAutoProgress.value.copy(
+                    target = result.target.label
+                )
+            }
+        )
+        val cached = XrayPreferences.zapretAutoCache(this)
+            ?.takeIf {
+                it.networkKey == networkKey &&
+                    it.algorithmVersion == ZAPRET_AUTO_ALGORITHM_VERSION
+            }
+            ?.preset
+        val candidates = buildList {
+            if (ConnectivityDiagnostics.bypassWorks(directResults)) add(ZapretPreset.DIRECT)
+            if (cached != null) add(cached)
+            addAll(ZapretPreset.testable)
+        }.distinct()
+        val scores = mutableListOf<Pair<ZapretPreset, Int>>()
+        for ((index, preset) in candidates.withIndex()) {
+            var candidatePassed = false
+            _zapretAutoProgress.value = ZapretAutoProgress(
+                running = true,
+                preset = preset.title,
+                tested = index,
+                total = candidates.size,
+                message = "Подбираем стратегию"
+            )
+            startForegroundNow("Подбор ByeDPI ${index + 1}/${candidates.size}")
+            try {
+                prepareZapretCandidate(preset)
+                delay(250)
+                check(isProcessAlive(tun2socksProcess)) {
+                    "tun2socks завершился во время проверки"
+                }
+                val results = testZapretCandidate(diagnostics)
+                val score = ConnectivityDiagnostics.bypassScore(results)
+                scores += preset to score
+                if (ConnectivityDiagnostics.bypassWorks(results)) {
+                    candidatePassed = true
+                    XrayPreferences.saveZapretAutoCache(
+                        this,
+                        ZapretAutoCache(
+                            networkKey,
+                            preset,
+                            score,
+                            ZAPRET_AUTO_ALGORITHM_VERSION
+                        )
+                    )
+                    return preset
+                }
+            } catch (e: Exception) {
+                Log.w("ByeDPI", "Preset ${preset.name} test failed", e)
+                scores += preset to 0
+            } finally {
+                if (!candidatePassed) stopProcesses()
+            }
+        }
+        val best = ZapretAutoSelection.best(scores)
+        _zapretAutoProgress.value = ZapretAutoProgress(
+            message = "Рабочая стратегия не найдена"
+        )
+        error(
+            "ByeDPI не прошёл проверку: лучший результат " +
+                "${best.second} из ${ConnectivityDiagnostics.dpiTargetIds.size}. " +
+                "Используйте Xray или свои параметры"
+        )
+    }
+
+    private suspend fun testZapretCandidate(
+        diagnostics: ConnectivityDiagnostics
+    ): List<DiagnosticResult> {
+        val results = mutableListOf<DiagnosticResult>()
+        val controls = ConnectivityDiagnostics.autoTargets.filter {
+            it.group == DiagnosticGroup.CONTROL
+        }
+        for (target in controls) {
+            _zapretAutoProgress.value = _zapretAutoProgress.value.copy(
+                target = target.label
+            )
+            results += diagnostics.runSocks(
+                ZAPRET_BRIDGE_PORT,
+                resolveForSocks = true,
+                targetsToTest = listOf(target)
+            ).single()
+        }
+        if (!ConnectivityDiagnostics.controlWorks(results)) return results
+
+        val dpiTargets = ConnectivityDiagnostics.autoTargets.filter {
+            it.group == DiagnosticGroup.DPI
+        }
+        for ((index, target) in dpiTargets.withIndex()) {
+            _zapretAutoProgress.value = _zapretAutoProgress.value.copy(
+                target = target.label
+            )
+            results += diagnostics.runSocks(
+                ZAPRET_BRIDGE_PORT,
+                resolveForSocks = true,
+                targetsToTest = listOf(target)
+            ).single()
+            val score = ConnectivityDiagnostics.bypassScore(results)
+            if (score >= ConnectivityDiagnostics.REQUIRED_DPI_SUCCESSES) break
+            val remaining = dpiTargets.size - index - 1
+            if (score + remaining < ConnectivityDiagnostics.REQUIRED_DPI_SUCCESSES) break
+        }
+        return results
+    }
+
+    private suspend fun prepareZapretCandidate(preset: ZapretPreset) {
+        stopProcesses()
+        proxyProcess = createZapretProcess(preset)
+        pipeLogs("ByeDPI", proxyProcess!!)
+        waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 3_000)
+        startZapretBridge()
+        tun = createTun()
+        startTun2socks(tun!!, ZAPRET_BRIDGE_PORT)
+    }
+
+    private fun verifyRunningTunnel() {
+        _verificationMessage.value = "Проверяем полный VPN-маршрут..."
+        scope.launch {
+            delay(250)
+            val results = ConnectivityDiagnostics().runSocks(
+                _socksPort.value ?: return@launch,
+                resolveForSocks = runningBackend == VpnBackend.ZAPRET,
+                targetsToTest = ConnectivityDiagnostics.autoTargets
+            )
+            val tunnelAlive = isProcessAlive(tun2socksProcess) && tun != null
+            _verificationMessage.value = if (
+                tunnelAlive && ConnectivityDiagnostics.bypassWorks(results)
+            ) {
+                "Backend и TUN работают; проверьте сайт кнопкой «Открыть»"
+            } else {
+                "VPN включён, но обход ограничений не подтверждён"
+            }
+        }
+    }
+
+    private fun createZapretProcess(preset: ZapretPreset): Process {
+        val binary = File(applicationInfo.nativeLibraryDir, "libciadpi.so")
+        check(binary.exists()) { "ByeDPI не найден" }
+        return ProcessBuilder(
+            ZapretCommand.build(
+                binary.absolutePath,
+                ZAPRET_SOCKS_PORT,
+                preset,
+                XrayPreferences.zapretCustomArguments(this)
+            )
+        )
+            .directory(filesDir)
+            .redirectErrorStream(true)
+            .start()
+    }
+
+    private suspend fun startZapretBridge() {
+        val binary = File(applicationInfo.nativeLibraryDir, "libxray.so")
+        check(binary.exists()) { "libxray.so не найден" }
+        val configFile = File(filesDir, "zapret-bridge.json").apply {
+            writeText(
+                ZapretBridgeConfig.build(
+                    inboundPort = ZAPRET_BRIDGE_PORT,
+                    upstreamPort = ZAPRET_SOCKS_PORT
+                )
+            )
+        }
+        bridgeProcess = ProcessBuilder(
+            binary.absolutePath,
+            "run",
+            "-config",
+            configFile.absolutePath
+        )
+            .directory(filesDir)
+            .redirectErrorStream(true)
+            .start()
+        pipeLogs("ZapretBridge", bridgeProcess!!)
+        waitForPort(bridgeProcess!!, ZAPRET_BRIDGE_PORT, 5_000)
+    }
+
+    private fun networkKey(): String {
+        val manager = getSystemService(ConnectivityManager::class.java)
+        val network = manager.activeNetwork
+        val link = manager.getLinkProperties(network)
+        val capabilities = manager.getNetworkCapabilities(network)
+        return buildString {
+            append(network?.networkHandle ?: 0L)
+            append('|').append(link?.interfaceName.orEmpty())
+            append('|').append(link?.dnsServers?.joinToString(",").orEmpty())
+            append('|').append(capabilities?.toString()?.hashCode() ?: 0)
         }
     }
 
     private fun createTun(): ParcelFileDescriptor {
         val builder = Builder()
-            .setSession("SA05 Xray")
+            .setSession("SA05 ${runningBackend.title}")
             .setMtu(1500)
             .addAddress("10.10.10.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -138,22 +414,6 @@ class XrayVpnService : VpnService() {
             }
         }
         return builder.establish() ?: error("Android не создал TUN-интерфейс")
-    }
-
-    private fun startXray(configFile: File) {
-        val binary = File(applicationInfo.nativeLibraryDir, "libxray.so")
-        check(binary.exists()) { "libxray.so не найден" }
-        xrayProcess = ProcessBuilder(
-            binary.absolutePath,
-            "run",
-            "-config",
-            configFile.absolutePath
-        )
-            .directory(filesDir)
-            .redirectErrorStream(true)
-            .apply { environment()["XRAY_LOCATION_ASSET"] = filesDir.absolutePath }
-            .start()
-        pipeLogs("xray", xrayProcess!!)
     }
 
     private suspend fun startTun2socks(fd: ParcelFileDescriptor, socksPort: Int) {
@@ -202,10 +462,10 @@ class XrayVpnService : VpnService() {
         error("tun2socks не создал управляющий сокет")
     }
 
-    private suspend fun waitForPort(port: Int, timeoutMs: Long) {
+    private suspend fun waitForPort(process: Process, port: Int, timeoutMs: Long) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            if (!isProcessAlive(xrayProcess)) error("Xray завершился при запуске")
+            if (!isProcessAlive(process)) error("Прокси завершился при запуске")
             try {
                 Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 100) }
                 return
@@ -213,7 +473,7 @@ class XrayVpnService : VpnService() {
                 delay(100)
             }
         }
-        error("Xray не открыл SOCKS-порт $port")
+        error("Прокси не открыл SOCKS-порт $port")
     }
 
     private fun pipeLogs(tag: String, process: Process) {
@@ -223,9 +483,7 @@ class XrayVpnService : VpnService() {
                     lines.forEach { Log.i(tag, it) }
                 }
             } catch (e: Exception) {
-                if (isProcessAlive(process)) {
-                    Log.w(tag, "Не удалось прочитать лог процесса", e)
-                }
+                if (isProcessAlive(process)) Log.w(tag, "Не удалось прочитать лог", e)
             }
         }
     }
@@ -240,6 +498,12 @@ class XrayVpnService : VpnService() {
         }
     }
 
+    private fun closeProcess(process: Process?) {
+        if (process == null) return
+        runCatching { process.inputStream.close() }
+        runCatching { process.destroy() }
+    }
+
     private fun copyGeoAssets() {
         listOf("geoip.dat", "geosite.dat").forEach { name ->
             val output = File(filesDir, name)
@@ -251,23 +515,44 @@ class XrayVpnService : VpnService() {
     }
 
     private fun stopTunnel() {
+        startGeneration.incrementAndGet()
         startJob?.cancel()
         stopProcesses()
         runningProfile = null
+        runningLabel = ""
         _state.value = STATE_DISCONNECTED
         _socksPort.value = null
+        _zapretAutoProgress.value = ZapretAutoProgress()
+        _verificationMessage.value = ""
         VpnRuntimeState.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private fun stopProcesses() {
-        tun2socksProcess?.destroy()
+        closeProcess(tun2socksProcess)
         tun2socksProcess = null
-        xrayProcess?.destroy()
-        xrayProcess = null
-        tun?.close()
+        closeProcess(bridgeProcess)
+        bridgeProcess = null
+        closeProcess(proxyProcess)
+        proxyProcess = null
+        runCatching { tun?.close() }
         tun = null
+    }
+
+    private fun selectedLabel(): String = when (runningBackend) {
+        VpnBackend.XRAY -> runningProfile?.remarks.orEmpty().ifBlank { "Локальный профиль" }
+        VpnBackend.ZAPRET -> XrayPreferences.zapretPreset(this).title
+    }
+
+    private fun writeRuntime(status: VpnRunStatus) {
+        VpnRuntimeState.write(
+            context = this,
+            status = status,
+            backend = runningBackend,
+            profileId = runningProfile?.id.orEmpty(),
+            profileName = runningLabel.ifBlank { selectedLabel() }
+        )
     }
 
     override fun onRevoke() {
@@ -279,13 +564,16 @@ class XrayVpnService : VpnService() {
         stopProcesses()
         scope.cancel()
         runningProfile = null
+        runningLabel = ""
         _state.value = STATE_DISCONNECTED
         _socksPort.value = null
+        _zapretAutoProgress.value = ZapretAutoProgress()
+        _verificationMessage.value = ""
         VpnRuntimeState.clear(this)
         super.onDestroy()
     }
 
-    private fun startForegroundNow(text: String, profile: SubscriptionProfile?) {
+    private fun startForegroundNow(text: String) {
         val openApp = PendingIntent.getActivity(
             this,
             0,
@@ -315,12 +603,11 @@ class XrayVpnService : VpnService() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         }
-        val profileName = profile?.remarks.orEmpty()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_vpn_tile)
             .setContentTitle(text)
-            .setContentText(profileName.ifBlank { "Локальный профиль" })
-            .setSubText("SA05 Xray")
+            .setContentText(runningLabel.ifBlank { selectedLabel() })
+            .setSubText("SA05 ${runningBackend.title}")
             .setContentIntent(openApp)
             .addAction(0, "Отключить", stopIntent)
             .addAction(0, "Переподключить", reconnectIntent)
@@ -344,7 +631,7 @@ class XrayVpnService : VpnService() {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "Xray VPN",
+                    "SA05 VPN",
                     NotificationManager.IMPORTANCE_LOW
                 )
             )

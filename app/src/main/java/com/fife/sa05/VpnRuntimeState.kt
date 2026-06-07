@@ -13,6 +13,7 @@ enum class VpnRunStatus {
 
 data class VpnRuntimeSnapshot(
     val status: VpnRunStatus,
+    val backend: VpnBackend,
     val profileId: String,
     val profileName: String
 )
@@ -20,6 +21,7 @@ data class VpnRuntimeSnapshot(
 object VpnRuntimeState {
     private const val FILE = "vpn_runtime"
     private const val KEY_STATUS = "status"
+    private const val KEY_BACKEND = "backend"
     private const val KEY_PROFILE_ID = "profile_id"
     private const val KEY_PROFILE_NAME = "profile_name"
 
@@ -32,6 +34,12 @@ object VpnRuntimeState {
                         ?: VpnRunStatus.DISCONNECTED.name
                 )
             }.getOrDefault(VpnRunStatus.DISCONNECTED),
+            backend = runCatching {
+                VpnBackend.valueOf(
+                    prefs.getString(KEY_BACKEND, VpnBackend.XRAY.name)
+                        ?: VpnBackend.XRAY.name
+                )
+            }.getOrDefault(VpnBackend.XRAY),
             profileId = prefs.getString(KEY_PROFILE_ID, "").orEmpty(),
             profileName = prefs.getString(KEY_PROFILE_NAME, "").orEmpty()
         )
@@ -40,19 +48,26 @@ object VpnRuntimeState {
     fun write(
         context: Context,
         status: VpnRunStatus,
-        profile: SubscriptionProfile?
+        backend: VpnBackend,
+        profileId: String = "",
+        profileName: String = ""
     ) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_STATUS, status.name)
-            .putString(KEY_PROFILE_ID, profile?.id.orEmpty())
-            .putString(KEY_PROFILE_NAME, profile?.remarks.orEmpty())
+            .putString(KEY_BACKEND, backend.name)
+            .putString(KEY_PROFILE_ID, profileId)
+            .putString(KEY_PROFILE_NAME, profileName)
             .commit()
         requestTileRefresh(context)
     }
 
     fun clear(context: Context) {
-        write(context, VpnRunStatus.DISCONNECTED, null)
+        write(
+            context,
+            VpnRunStatus.DISCONNECTED,
+            XrayPreferences.vpnBackend(context)
+        )
     }
 
     fun requestTileRefresh(context: Context) {

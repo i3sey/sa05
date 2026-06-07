@@ -7,6 +7,7 @@ class Sa05Application : Application() {
         super.onCreate()
         // A live VPN service shares this process. A fresh process means the
         // previous TUN and native child processes no longer exist.
-        VpnRuntimeState.clear(this)
+        // Isolated diagnostics has no access to app storage or preferences.
+        runCatching { VpnRuntimeState.clear(this) }
     }
 }
