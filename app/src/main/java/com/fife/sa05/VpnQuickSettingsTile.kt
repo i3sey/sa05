@@ -33,13 +33,7 @@ class VpnQuickSettingsTile : TileService() {
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
-        if (backend == VpnBackend.TELEGRAM &&
-            !XrayPreferences.telegramProxyApplied(this)
-        ) {
-            openAppForPermission()
-        } else if ((backend == VpnBackend.TELEGRAM || VpnService.prepare(this) == null) &&
-            !notificationDenied
-        ) {
+        if (VpnService.prepare(this) == null && !notificationDenied) {
             val selected = selectedLabel(backend)
             VpnRuntimeState.write(
                 this,
@@ -84,11 +78,14 @@ class VpnQuickSettingsTile : TileService() {
     }
 
     private fun selectedLabel(backend: VpnBackend): String = when (backend) {
-        VpnBackend.XRAY ->
+        VpnBackend.PROXY_ONLY ->
             XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
                 .ifBlank { "Xray" }
-        VpnBackend.ZAPRET -> XrayPreferences.zapretPreset(this).title
-        VpnBackend.TELEGRAM -> "Telegram WS Proxy"
+        VpnBackend.LOCAL_BYPASS ->
+            "${XrayPreferences.zapretPreset(this).title} + Telegram"
+        VpnBackend.FULL_AUTO ->
+            XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
+                .ifBlank { "Xray" } + " + локальный обход"
     }
 
     @SuppressLint("StartActivityAndCollapseDeprecated")

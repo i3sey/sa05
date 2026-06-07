@@ -17,6 +17,9 @@ object XrayPreferences {
     private const val KEY_ZAPRET_CACHE_PRESET = "zapret_cache_preset"
     private const val KEY_ZAPRET_CACHE_SCORE = "zapret_cache_score"
     private const val KEY_ZAPRET_CACHE_VERSION = "zapret_cache_version"
+    private const val KEY_YOUTUBE_CACHE_NETWORK = "youtube_cache_network"
+    private const val KEY_YOUTUBE_CACHE_PRESET = "youtube_cache_preset"
+    private const val KEY_YOUTUBE_CACHE_VERSION = "youtube_cache_version"
     private const val KEY_ZAPRET_CUSTOM_ARGUMENTS = "zapret_custom_arguments"
     private const val KEY_TELEGRAM_CF_ENABLED = "telegram_cf_enabled"
     private const val KEY_TELEGRAM_CF_DOMAIN = "telegram_cf_domain"
@@ -69,13 +72,15 @@ object XrayPreferences {
         prefs(context).edit().putBoolean(KEY_DYNAMIC_COLOR, enabled).apply()
     }
 
-    fun vpnBackend(context: Context): VpnBackend =
-        runCatching {
-            VpnBackend.valueOf(
-                prefs(context).getString(KEY_VPN_BACKEND, VpnBackend.XRAY.name)
-                    ?: VpnBackend.XRAY.name
-            )
-        }.getOrDefault(VpnBackend.XRAY)
+    fun vpnBackend(context: Context): VpnBackend {
+        val preferences = prefs(context)
+        val stored = preferences.getString(KEY_VPN_BACKEND, null)
+        val backend = VpnBackend.fromStoredName(stored)
+        if (stored != backend.name) {
+            preferences.edit().putString(KEY_VPN_BACKEND, backend.name).apply()
+        }
+        return backend
+    }
 
     fun saveVpnBackend(context: Context, backend: VpnBackend) {
         prefs(context).edit().putString(KEY_VPN_BACKEND, backend.name).apply()
@@ -156,6 +161,36 @@ object XrayPreferences {
             .remove(KEY_ZAPRET_CACHE_PRESET)
             .remove(KEY_ZAPRET_CACHE_SCORE)
             .remove(KEY_ZAPRET_CACHE_VERSION)
+            .apply()
+    }
+
+    fun youtubeAutoCache(context: Context): ZapretAutoCache? {
+        val preferences = prefs(context)
+        val network = preferences.getString(KEY_YOUTUBE_CACHE_NETWORK, "").orEmpty()
+        if (network.isBlank()) return null
+        return ZapretAutoCache(
+            networkKey = network,
+            preset = ZapretPreset.fromName(
+                preferences.getString(KEY_YOUTUBE_CACHE_PRESET, null)
+            ).takeUnless { it == ZapretPreset.AUTO } ?: return null,
+            reachableCount = 1,
+            algorithmVersion = preferences.getInt(KEY_YOUTUBE_CACHE_VERSION, 0)
+        )
+    }
+
+    fun saveYoutubeAutoCache(context: Context, cache: ZapretAutoCache) {
+        prefs(context).edit()
+            .putString(KEY_YOUTUBE_CACHE_NETWORK, cache.networkKey)
+            .putString(KEY_YOUTUBE_CACHE_PRESET, cache.preset.name)
+            .putInt(KEY_YOUTUBE_CACHE_VERSION, cache.algorithmVersion)
+            .apply()
+    }
+
+    fun clearYoutubeAutoCache(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_YOUTUBE_CACHE_NETWORK)
+            .remove(KEY_YOUTUBE_CACHE_PRESET)
+            .remove(KEY_YOUTUBE_CACHE_VERSION)
             .apply()
     }
 

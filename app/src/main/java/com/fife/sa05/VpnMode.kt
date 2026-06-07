@@ -1,9 +1,23 @@
 package com.fife.sa05
 
 enum class VpnBackend(val title: String) {
-    XRAY("Xray"),
-    ZAPRET("Zapret"),
-    TELEGRAM("Telegram")
+    FULL_AUTO("Фулл авто"),
+    LOCAL_BYPASS("Локальный обход"),
+    PROXY_ONLY("Только прокси");
+
+    val usesTelegram: Boolean
+        get() = this != PROXY_ONLY
+
+    val usesXrayProfile: Boolean
+        get() = this != LOCAL_BYPASS
+
+    companion object {
+        fun fromStoredName(value: String?): VpnBackend = when (value) {
+            "XRAY", null -> PROXY_ONLY
+            "ZAPRET", "TELEGRAM" -> LOCAL_BYPASS
+            else -> entries.firstOrNull { it.name == value } ?: PROXY_ONLY
+        }
+    }
 }
 
 enum class ZapretPreset(
@@ -62,6 +76,82 @@ enum class ZapretPreset(
             "--mod-http", "h,d,r"
         )
     ),
+    YOUTUBE_STABLE(
+        "YouTube stable",
+        listOf(
+            "--proto", "http,tls",
+            "--split", "1",
+            "--disoob", "3",
+            "--disorder", "7",
+            "--fake", "-1",
+            "--tlsrec", "3+h",
+            "--mod-http", "h,d,r"
+        )
+    ),
+    YOUTUBE_STABLE_AUTO(
+        "YouTube stable auto",
+        listOf(
+            "--auto-mode", "1",
+            "--proto", "http,tls",
+            "--split", "1",
+            "--disoob", "3",
+            "--disorder", "7",
+            "--fake", "-1",
+            "--tlsrec", "3+h",
+            "--mod-http", "h,d,r"
+        )
+    ),
+    AUTO_OOB_FAKE(
+        "OOB adaptive",
+        listOf(
+            "--split", "1",
+            "--oob", "1",
+            "--auto", "redirect",
+            "--oob", "1",
+            "--auto", "torst",
+            "--fake", "-1",
+            "--tlsrec", "1+s",
+            "--auto", "ssl_err"
+        )
+    ),
+    FAKE_TLS_ORIGINAL(
+        "Fake TLS original",
+        listOf(
+            "--proto", "tls",
+            "--fake", "-1",
+            "--fake-tls-mod", "orig",
+            "--ttl", "8"
+        )
+    ),
+    FAKE_TLS_RANDOM(
+        "Fake TLS random",
+        listOf(
+            "--proto", "tls",
+            "--fake", "-1",
+            "--fake-tls-mod", "rand",
+            "--fake-sni", "ya.ru",
+            "--ttl", "8"
+        )
+    ),
+    FAKE_TTL_ADAPTIVE(
+        "Fake TTL adaptive",
+        listOf(
+            "--proto", "tls",
+            "--fake", "-1",
+            "--ttl", "10",
+            "--auto", "ssl_err",
+            "--fake", "-1",
+            "--ttl", "5"
+        )
+    ),
+    TLS_MINOR(
+        "TLS minor",
+        listOf(
+            "--proto", "tls",
+            "--split", "1+s",
+            "--tlsminor", "1"
+        )
+    ),
     CUSTOM("Свои параметры", emptyList());
 
     companion object {
@@ -75,7 +165,33 @@ enum class ZapretPreset(
             FAKE_REORDER,
             FAKE_TTL,
             TLS_RECORD,
-            COMBINED
+            COMBINED,
+            YOUTUBE_STABLE,
+            YOUTUBE_STABLE_AUTO,
+            AUTO_OOB_FAKE,
+            FAKE_TLS_ORIGINAL,
+            FAKE_TLS_RANDOM,
+            FAKE_TTL_ADAPTIVE,
+            TLS_MINOR
+        )
+
+        val youtubeTestable = listOf(
+            YOUTUBE_STABLE,
+            YOUTUBE_STABLE_AUTO,
+            AUTO_OOB_FAKE,
+            FAKE_TLS_ORIGINAL,
+            FAKE_TLS_RANDOM,
+            FAKE_TTL_ADAPTIVE,
+            TLS_MINOR,
+            DISORDER_OOB,
+            COMBINED,
+            SNI_DISORDER,
+            TLS_RECORD,
+            ADAPTIVE,
+            FAKE_REORDER,
+            FAKE_TTL,
+            OOB,
+            DISORDER
         )
 
         fun fromName(value: String?): ZapretPreset =

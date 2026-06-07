@@ -10,9 +10,8 @@ complete Xray configs. The selected profile is identified by `remarks`.
 
 ## Architecture
 
-1. The app has three mutually exclusive backends: Xray, Zapret (ByeDPI), and
-   Telegram WS Proxy. `XrayVpnService` owns the Android VPN for Xray/Zapret;
-   `TelegramProxyService` runs a local MTProto proxy without a TUN.
+1. `XrayVpnService` owns one Android VPN and three composite modes:
+   Full Auto, Local Bypass, and Proxy Only.
 2. Xray must expose a loopback SOCKS inbound with UDP enabled.
 3. Android `VpnService` creates an IPv4 TUN (`10.10.10.1/30`).
 4. `libtun2socks.so` forwards TUN traffic to that SOCKS inbound.
@@ -30,12 +29,13 @@ complete Xray configs. The selected profile is identified by `remarks`.
 10. `sa05://add/<percent-encoded-https-url>` imports a subscription immediately.
     Invalid or failed imports never replace the last valid cached subscription.
 11. Main-screen diagnostics probes Google, Ya.ru, RuTracker, Rule34, Kinozal,
-    NNMClub, and Telegram sequentially and publishes each result immediately.
+    NNMClub, YouTube, and Telegram sequentially and publishes each result immediately.
     When connected, probes validate the active backend's SOCKS inbound and also
     require the TUN and tun2socks processes to remain alive. The Open action is
     the authoritative end-to-end browser check because the client UID must stay
     excluded from its own VPN.
-12. Zapret mode starts ByeDPI on loopback and a minimal Xray compatibility
+12. Local Bypass starts Telegram WS Proxy plus ByeDPI on loopback and a minimal
+    Xray compatibility
     bridge. BadVPN tun2socks sends TUN traffic to Xray; Xray forwards TCP
     through ByeDPI, blocks QUIC on UDP/443 to force browser TCP fallback, and
     sends remaining UDP (including DNS) directly. This avoids direct
@@ -51,9 +51,26 @@ complete Xray configs. The selected profile is identified by `remarks`.
     RuTracker 5xx responses are shown as inconclusive.
 15. Custom ByeDPI arguments are supported. The app always owns the loopback
     address and port and rejects daemon, pidfile, and transparent-mode overrides.
-16. Telegram mode listens on `127.0.0.1:1443` and must be applied in Telegram
-    through `tg://proxy`. It is not a general-purpose VPN or SOCKS proxy.
-17. Telegram mode uses Cloudflare WebSocket routing by default, supports an
+16. Full Auto sends Telegram through local TG WS Proxy, YouTube TCP through a
+    selected ByeDPI process behind the local Xray compatibility bridge, and all
+    remaining traffic through the selected
+    provider Xray profile. Runtime-only Xray rules block QUIC globally to force
+    reliable TCP fallback and route
+    `geosite:youtube` plus major YouTube CDN domains to ByeDPI.
+    Sniffing uses `routeOnly:true`, so routing sees the hostname while the
+    compatibility bridge receives the original destination IP and forwards it
+    to ByeDPI, matching the working Local Bypass path.
+17. Full Auto performs a strict HTTPS YouTube probe for each ByeDPI preset and
+    validates a real mobile Innertube player POST plus web, mobile API, image,
+    and video-edge endpoints through the final
+    Xray-to-bridge-to-ByeDPI route. If every local preset fails, Full Auto keeps
+    Telegram WS active and sends YouTube through the selected provider Xray
+    profile instead of failing the VPN. Its cache is separate from Local Bypass
+    auto-selection and is tied to the current Android network.
+18. Proxy Only starts the selected Xray profile without ByeDPI or TG WS Proxy.
+19. TG WS Proxy listens on `127.0.0.1:1443` and must be applied in Telegram
+    through `tg://proxy`. It is not a general-purpose SOCKS proxy.
+20. TG WS Proxy uses Cloudflare WebSocket routing by default, supports an
     optional custom Cloudflare domain, and generates its MTProto secret locally.
 
 ## Config contract
@@ -65,6 +82,8 @@ complete Xray configs. The selected profile is identified by `remarks`.
   - a valid numeric `"port"`
   - `"settings": { "udp": true }`
 - The saved config is never overwritten.
+- Full Auto augments only the runtime copy with collision-safe internal
+  outbounds and highest-priority YouTube routing rules.
 - Provider Hysteria JSON is passed through unchanged. The bundled Xray fork
   accepts `"protocol":"hysteria"` and rejects conversion to `"hysteria2"`.
 - `geoip.dat` and `geosite.dat` are copied from APK assets to `filesDir`.
@@ -79,6 +98,13 @@ complete Xray configs. The selected profile is identified by `remarks`.
   transports including Reality, XHTTP, and Hysteria.
 - `libciadpi.so` is the unmodified static aarch64 executable from ByeDPI
   v0.17.3, packaged with a `.so` name so Android extracts it as executable.
+- Current ByeDPI presets are based on the upstream v0.17.x options and examples
+  (`fake-tls-mod`, `tlsminor`, `auto-mode`, adaptive fake/OOB chains):
+  https://github.com/hufrea/byedpi and
+  https://github.com/hufrea/byedpi/discussions/533.
+- The expanded YouTube mobile/API/CDN domain coverage follows the maintained
+  zapret-discord-youtube lists:
+  https://github.com/Flowseal/zapret-discord-youtube.
 - `libtgwsproxy.so` is from Telegram WS Proxy Android v1.2.0 and is called
   through JNA. Its corresponding GPLv3 source archive is bundled under
   `third_party/tg-ws-proxy-android/`.
@@ -108,7 +134,9 @@ app/build/outputs/apk/debug/app-debug.apk
   `observatory.probeUrl`, then `https://www.gstatic.com/generate_204`.
 - Restriction diagnostics use validated HTTPS responses rather than ICMP.
   Rule34, Kinozal, and NNMClub measure DPI bypass; RuTracker is informational
-  and Telegram indicates separate IP-level availability. Automated requests
+  and Telegram indicates separate IP-level availability. YouTube is
+  informational for general scoring and is the strict Full Auto selector.
+  Automated requests
   validate the backend but cannot originate from the app's excluded UID through
   its own TUN. Use Open for the final browser-route check.
 - Ping measures time from HTTP request write to the first response byte. It
@@ -130,8 +158,8 @@ app/build/outputs/apk/debug/app-debug.apk
 - Notification actions stop the current VPN or reconnect with the currently
   selected profile. The Quick Settings tile opens the app's VPN permission
   flow when Android authorization has not been granted yet.
-- Xray and Zapret share one app-exclusion list. Changing backend while connected
+- All modes share one app-exclusion list. Changing mode while connected
   reconnects the service immediately.
-- Telegram mode is mutually exclusive with Xray/Zapret. App exclusions and
-  restriction diagnostics do not apply because Telegram connects explicitly
-  to the local MTProto endpoint.
+- Local Bypass and Full Auto fail atomically if TG WS Proxy cannot start.
+- The app UID remains excluded from TUN, so TG WS WebSocket connections and
+  Xray outbound sockets leave directly without looping into the VPN.

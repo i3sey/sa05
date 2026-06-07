@@ -23,6 +23,24 @@ data class XrayPingConfig(
 )
 
 object XrayConfig {
+    private val youtubeDomains = listOf(
+        "geosite:youtube",
+        "domain:youtube.com",
+        "domain:youtu.be",
+        "domain:youtube-nocookie.com",
+        "domain:youtubekids.com",
+        "domain:googlevideo.com",
+        "domain:ytimg.com",
+        "domain:googleusercontent.com",
+        "domain:ggpht.com",
+        "domain:youtubei.googleapis.com",
+        "domain:youtubeembeddedplayer.googleapis.com",
+        "domain:jnn-pa.googleapis.com",
+        "domain:wide-youtube.l.google.com",
+        "domain:youtube-ui.l.google.com",
+        "domain:yt-video-upload.l.google.com"
+    )
+
     fun validate(raw: String): ValidatedXrayConfig {
         val root = try {
             JSONObject(raw)
@@ -88,6 +106,92 @@ object XrayConfig {
             }
         }
         return result
+    }
+
+    fun buildFullAutoConfig(raw: String, byeDpiPort: Int): ValidatedXrayConfig {
+        require(byeDpiPort in 1..65535)
+        val root = parse(raw)
+        val validated = validate(raw)
+        val inbounds = root.getJSONArray("inbounds")
+        for (index in 0 until inbounds.length()) {
+            val inbound = inbounds.optJSONObject(index) ?: continue
+            if (inbound.optString("protocol") != "socks" ||
+                inbound.optInt("port") != validated.socksPort
+            ) continue
+            val sniffing = inbound.optJSONObject("sniffing") ?: JSONObject().also {
+                inbound.put("sniffing", it)
+            }
+            sniffing.put("enabled", true)
+            // Keep the original IP for ByeDPI while using the sniffed host only for routing.
+            sniffing.put("routeOnly", true)
+            val overrides = sniffing.optJSONArray("destOverride") ?: JSONArray()
+            val values = (0 until overrides.length())
+                .map { overrides.optString(it) }
+                .filter(String::isNotBlank)
+                .toMutableSet()
+            values += listOf("http", "tls", "quic")
+            sniffing.put("destOverride", JSONArray(values.toList()))
+            break
+        }
+
+        val outbounds = root.optJSONArray("outbounds") ?: JSONArray().also {
+            root.put("outbounds", it)
+        }
+        val tags = (0 until outbounds.length()).mapNotNull {
+            outbounds.optJSONObject(it)?.optString("tag")?.takeIf(String::isNotBlank)
+        }.toMutableSet()
+        fun uniqueTag(base: String): String {
+            var value = base
+            var suffix = 2
+            while (!tags.add(value)) value = "$base-${suffix++}"
+            return value
+        }
+        val byeDpiTag = uniqueTag("__sa05_youtube_byedpi")
+        val blockTag = uniqueTag("__sa05_youtube_quic_block")
+        outbounds.put(
+            JSONObject()
+                .put("tag", byeDpiTag)
+                .put("protocol", "socks")
+                .put(
+                    "settings",
+                    JSONObject().put(
+                        "servers",
+                        JSONArray().put(
+                            JSONObject()
+                                .put("address", "127.0.0.1")
+                                .put("port", byeDpiPort)
+                        )
+                    )
+                )
+        )
+        outbounds.put(
+            JSONObject()
+                .put("tag", blockTag)
+                .put("protocol", "blackhole")
+        )
+
+        val routing = root.optJSONObject("routing") ?: JSONObject().also {
+            root.put("routing", it)
+        }
+        val existingRules = routing.optJSONArray("rules") ?: JSONArray()
+        val rules = JSONArray()
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("network", "udp")
+                    .put("port", "443")
+                    .put("outboundTag", blockTag)
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("network", "tcp")
+                    .put("domain", JSONArray(youtubeDomains))
+                    .put("outboundTag", byeDpiTag)
+            )
+        for (index in 0 until existingRules.length()) rules.put(existingRules.get(index))
+        routing.put("rules", rules)
+        return ValidatedXrayConfig(root.toString(2), validated.socksPort)
     }
 
     fun buildPingConfig(raw: String, host: XrayHost, socksPort: Int): XrayPingConfig {

@@ -112,4 +112,71 @@ class XrayConfigTest {
         assertEquals(8_000, ping.timeoutMs)
         assertTrue(ping.runtimeJson.contains("__ping_in"))
     }
+
+    @Test
+    fun fullAutoPrependsYoutubeRoutesWithoutChangingSourceConfig() {
+        val source = config
+        val runtime = XrayConfig.buildFullAutoConfig(source, 10811)
+        val root = JSONObject(runtime.runtimeJson)
+        val rules = root.getJSONObject("routing").getJSONArray("rules")
+        val udpRule = rules.getJSONObject(0)
+        val tcpRule = rules.getJSONObject(1)
+
+        assertEquals("udp", udpRule.getString("network"))
+        assertEquals("443", udpRule.getString("port"))
+        assertFalse(udpRule.has("domain"))
+        assertEquals("tcp", tcpRule.getString("network"))
+        assertTrue(
+            tcpRule.getJSONArray("domain").toString().contains("geosite:youtube")
+        )
+        assertTrue(
+            tcpRule.getJSONArray("domain").toString()
+                .contains("domain:youtubei.googleapis.com")
+        )
+        assertTrue(
+            tcpRule.getJSONArray("domain").toString()
+                .contains("domain:googlevideo.com")
+        )
+        val outboundTag = tcpRule.getString("outboundTag")
+        val outbounds = root.getJSONArray("outbounds")
+        val byeDpi = (0 until outbounds.length())
+            .map { outbounds.getJSONObject(it) }
+            .single { it.optString("tag") == outboundTag }
+        assertEquals("socks", byeDpi.getString("protocol"))
+        assertEquals(
+            10811,
+            byeDpi.getJSONObject("settings")
+                .getJSONArray("servers")
+                .getJSONObject(0)
+                .getInt("port")
+        )
+        assertEquals(config, source)
+    }
+
+    @Test
+    fun fullAutoEnablesSniffingAndAvoidsProviderTagCollisions() {
+        val root = JSONObject(config)
+        root.getJSONArray("outbounds")
+            .put(
+                JSONObject()
+                    .put("tag", "__sa05_youtube_byedpi")
+                    .put("protocol", "freedom")
+            )
+        val runtime = JSONObject(
+            XrayConfig.buildFullAutoConfig(root.toString(), 10811).runtimeJson
+        )
+        val inbound = runtime.getJSONArray("inbounds").getJSONObject(0)
+        val sniffing = inbound.getJSONObject("sniffing")
+        val overrides = sniffing.getJSONArray("destOverride").toString()
+        val tcpTag = runtime.getJSONObject("routing")
+            .getJSONArray("rules")
+            .getJSONObject(1)
+            .getString("outboundTag")
+
+        assertTrue(sniffing.getBoolean("enabled"))
+        assertTrue(sniffing.getBoolean("routeOnly"))
+        assertTrue(overrides.contains("tls"))
+        assertTrue(overrides.contains("quic"))
+        assertEquals("__sa05_youtube_byedpi-2", tcpTag)
+    }
 }

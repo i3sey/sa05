@@ -6,6 +6,25 @@ import org.junit.Test
 
 class VpnModeTest {
     @Test
+    fun compositeModesExposeRequiredComponents() {
+        assertTrue(VpnBackend.FULL_AUTO.usesTelegram)
+        assertTrue(VpnBackend.FULL_AUTO.usesXrayProfile)
+        assertTrue(VpnBackend.LOCAL_BYPASS.usesTelegram)
+        assertTrue(!VpnBackend.LOCAL_BYPASS.usesXrayProfile)
+        assertTrue(!VpnBackend.PROXY_ONLY.usesTelegram)
+        assertTrue(VpnBackend.PROXY_ONLY.usesXrayProfile)
+    }
+
+    @Test
+    fun legacyModesMigrateToCompositeModes() {
+        assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName("XRAY"))
+        assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("ZAPRET"))
+        assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("TELEGRAM"))
+        assertEquals(VpnBackend.FULL_AUTO, VpnBackend.fromStoredName("FULL_AUTO"))
+        assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName("unknown"))
+    }
+
+    @Test
     fun zapretCommandBindsOnlyToLoopback() {
         val command = ZapretCommand.build("/native/libciadpi.so", 10810, ZapretPreset.DISORDER)
 
@@ -33,6 +52,22 @@ class VpnModeTest {
 
         assertEquals(ZapretPreset.DISORDER, result.first)
         assertEquals(3, result.second)
+    }
+
+    @Test
+    fun currentYoutubeStrategiesAreIncludedInAutoSelection() {
+        assertTrue(ZapretPreset.YOUTUBE_STABLE in ZapretPreset.testable)
+        assertTrue(ZapretPreset.YOUTUBE_STABLE_AUTO in ZapretPreset.testable)
+        assertTrue(ZapretPreset.AUTO_OOB_FAKE in ZapretPreset.testable)
+        assertTrue(ZapretPreset.FAKE_TLS_ORIGINAL in ZapretPreset.testable)
+        assertTrue(ZapretPreset.FAKE_TLS_RANDOM in ZapretPreset.testable)
+        assertTrue(ZapretPreset.FAKE_TTL_ADAPTIVE in ZapretPreset.testable)
+        assertTrue(ZapretPreset.TLS_MINOR in ZapretPreset.testable)
+        assertEquals(ZapretPreset.YOUTUBE_STABLE, ZapretPreset.youtubeTestable.first())
+        assertEquals(
+            ZapretPreset.testable.toSet(),
+            ZapretPreset.youtubeTestable.toSet()
+        )
     }
 
     @Test

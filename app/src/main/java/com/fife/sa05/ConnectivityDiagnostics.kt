@@ -14,6 +14,7 @@ import java.net.Socket
 import java.net.URI
 import javax.net.ssl.SSLSocketFactory
 import kotlin.coroutines.coroutineContext
+import org.json.JSONObject
 
 data class DiagnosticTarget(
     val id: String,
@@ -23,13 +24,18 @@ data class DiagnosticTarget(
     val allowedRedirectHosts: Set<String> = emptySet(),
     val expectedStatus: Int? = null,
     val minimumBodyBytes: Int = 128,
-    val informationalOnly: Boolean = false
+    val informationalOnly: Boolean = false,
+    val method: String = "GET",
+    val requestHeaders: Map<String, String> = emptyMap(),
+    val requestBody: String = "",
+    val maximumBodyBytes: Int = 4_096
 )
 
 enum class DiagnosticGroup {
     CONTROL,
     DPI,
-    IP
+    IP,
+    MEDIA
 }
 
 enum class DiagnosticStatus {
@@ -75,7 +81,6 @@ class ConnectivityDiagnostics {
     companion object {
         private const val TIMEOUT_MS = 3_500
         private const val MAX_REDIRECTS = 3
-        private const val MAX_BODY_BYTES = 4_096
         const val REQUIRED_DPI_SUCCESSES = 2
 
         val targets = listOf(
@@ -120,6 +125,13 @@ class ConnectivityDiagnostics {
                 group = DiagnosticGroup.DPI
             ),
             DiagnosticTarget(
+                id = "youtube",
+                label = "YouTube",
+                url = "https://www.youtube.com/",
+                group = DiagnosticGroup.MEDIA,
+                allowedRedirectHosts = setOf("youtube.com")
+            ),
+            DiagnosticTarget(
                 id = "telegram",
                 label = "Telegram",
                 url = "https://telegram.org/",
@@ -131,6 +143,73 @@ class ConnectivityDiagnostics {
             it.group == DiagnosticGroup.CONTROL ||
                 (it.group == DiagnosticGroup.DPI && !it.informationalOnly)
         }
+
+        val youtubeTarget: DiagnosticTarget
+            get() = target("youtube")
+
+        val youtubeAutoTargets = listOf(
+            DiagnosticTarget(
+                id = "youtube-player",
+                label = "YouTube Player API",
+                url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+                group = DiagnosticGroup.MEDIA,
+                expectedStatus = 200,
+                minimumBodyBytes = 4_096,
+                maximumBodyBytes = 1_048_576,
+                method = "POST",
+                requestHeaders = mapOf(
+                    "Content-Type" to "application/json",
+                    "X-YouTube-Client-Name" to "3",
+                    "X-YouTube-Client-Version" to "20.10.41"
+                ),
+                requestBody = """
+                    {
+                      "videoId":"dQw4w9WgXcQ",
+                      "context":{
+                        "client":{
+                          "clientName":"ANDROID",
+                          "clientVersion":"20.10.41",
+                          "androidSdkVersion":35,
+                          "hl":"en",
+                          "gl":"US"
+                        }
+                      }
+                    }
+                """.trimIndent()
+            ),
+            DiagnosticTarget(
+                id = "youtube-web",
+                label = "YouTube Web",
+                url = "https://www.youtube.com/generate_204",
+                group = DiagnosticGroup.MEDIA,
+                expectedStatus = 204,
+                minimumBodyBytes = 0
+            ),
+            DiagnosticTarget(
+                id = "youtube-mobile",
+                label = "YouTube API",
+                url = "https://youtubei.googleapis.com/generate_204",
+                group = DiagnosticGroup.MEDIA,
+                expectedStatus = 204,
+                minimumBodyBytes = 0
+            ),
+            DiagnosticTarget(
+                id = "youtube-images",
+                label = "YouTube Images",
+                url = "https://i.ytimg.com/generate_204",
+                group = DiagnosticGroup.MEDIA,
+                expectedStatus = 204,
+                minimumBodyBytes = 0
+            ),
+            DiagnosticTarget(
+                id = "youtube-video",
+                label = "YouTube Video",
+                url = "https://redirector.googlevideo.com/generate_204",
+                group = DiagnosticGroup.MEDIA,
+                expectedStatus = 204,
+                minimumBodyBytes = 0
+            )
+        )
 
         val dpiTargetIds = targets
             .filter { it.group == DiagnosticGroup.DPI && !it.informationalOnly }
@@ -181,6 +260,84 @@ class ConnectivityDiagnostics {
         return results
     }
 
+    suspend fun probeYoutubePlaybackSocks(
+        socksPort: Int,
+        resolveForSocks: Boolean
+    ): DiagnosticResult = withContext(Dispatchers.IO) {
+        val playerTarget = youtubeAutoTargets.first()
+        val started = System.nanoTime()
+        try {
+            val player = request(
+                playerTarget,
+                URI(playerTarget.url),
+                0,
+                socksPort,
+                resolveForSocks
+            )
+            val playerResult = classifyResponse(
+                playerTarget,
+                player.statusCode,
+                player.body.size,
+                player.finalUrl,
+                (System.nanoTime() - started) / 1_000_000
+            )
+            if (!playerResult.reachable) return@withContext playerResult
+            val root = JSONObject(player.body.toString(Charsets.UTF_8))
+            val streaming = root.optJSONObject("streamingData")
+                ?: return@withContext playerResult.copy(
+                    status = DiagnosticStatus.FAILED,
+                    error = "Player API не вернул streamingData"
+                )
+            val formats = streaming.optJSONArray("adaptiveFormats")
+                ?: streaming.optJSONArray("formats")
+                ?: return@withContext playerResult.copy(
+                    status = DiagnosticStatus.FAILED,
+                    error = "Player API не вернул форматы видео"
+                )
+            val mediaUrl = (0 until formats.length()).firstNotNullOfOrNull { index ->
+                formats.optJSONObject(index)?.optString("url")?.takeIf(String::isNotBlank)
+            } ?: return@withContext playerResult.copy(
+                status = DiagnosticStatus.FAILED,
+                error = "Player API не вернул прямой URL видео"
+            )
+            val mediaTarget = DiagnosticTarget(
+                id = "youtube-media",
+                label = "YouTube Media",
+                url = mediaUrl,
+                group = DiagnosticGroup.MEDIA,
+                minimumBodyBytes = 16_384,
+                maximumBodyBytes = 65_536,
+                requestHeaders = mapOf("Range" to "bytes=0-65535")
+            )
+            val mediaStarted = System.nanoTime()
+            val media = request(
+                mediaTarget,
+                URI(mediaUrl),
+                0,
+                socksPort,
+                resolveForSocks
+            )
+            classifyResponse(
+                mediaTarget,
+                media.statusCode,
+                media.body.size,
+                media.finalUrl,
+                (System.nanoTime() - mediaStarted) / 1_000_000
+            )
+        } catch (error: Throwable) {
+            DiagnosticResult(
+                target = DiagnosticTarget(
+                    id = "youtube-media",
+                    label = "YouTube Media",
+                    url = playerTarget.url,
+                    group = DiagnosticGroup.MEDIA
+                ),
+                status = DiagnosticStatus.FAILED,
+                error = diagnosticError(error)
+            )
+        }
+    }
+
     fun probeDirect(target: DiagnosticTarget): DiagnosticResult {
         return probe(target, null, false)
     }
@@ -202,7 +359,7 @@ class ConnectivityDiagnostics {
             classifyResponse(
                 target = target,
                 statusCode = response.statusCode,
-                bodyBytes = response.bodyBytes,
+                bodyBytes = response.body.size,
                 finalUrl = response.finalUrl,
                 delayMs = (System.nanoTime() - started) / 1_000_000
             )
@@ -218,7 +375,7 @@ class ConnectivityDiagnostics {
     private data class HttpResponse(
         val statusCode: Int,
         val headers: Map<String, String>,
-        val bodyBytes: Int,
+        val body: ByteArray,
         val finalUrl: String
     )
 
@@ -246,22 +403,39 @@ class ConnectivityDiagnostics {
                 append(uri.rawPath?.ifBlank { "/" } ?: "/")
                 if (!uri.rawQuery.isNullOrBlank()) append('?').append(uri.rawQuery)
             }
+            val body = target.requestBody.toByteArray(Charsets.UTF_8)
+            val extraHeaders = buildString {
+                target.requestHeaders.forEach { (name, value) ->
+                    append(name).append(": ").append(value).append("\r\n")
+                }
+                if (body.isNotEmpty()) {
+                    append("Content-Length: ").append(body.size).append("\r\n")
+                }
+            }
             val request = (
-                "GET $path HTTP/1.1\r\n" +
+                "${target.method} $path HTTP/1.1\r\n" +
                     "Host: ${uri.host}\r\n" +
                     "Connection: close\r\n" +
                     "Accept: text/html,application/xhtml+xml,*/*;q=0.8\r\n" +
                     "Accept-Encoding: identity\r\n" +
                     "User-Agent: Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36\r\n\r\n"
+                    "(KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36\r\n" +
+                    extraHeaders +
+                    "\r\n"
                 ).toByteArray(Charsets.US_ASCII)
             it.getOutputStream().write(request)
+            if (body.isNotEmpty()) it.getOutputStream().write(body)
             it.getOutputStream().flush()
             val input = BufferedInputStream(it.getInputStream())
             val head = readResponseHead(input)
             if (head.statusCode in 300..399 && redirects < MAX_REDIRECTS) {
                 val location = head.headers["location"]
-                    ?: return HttpResponse(head.statusCode, head.headers, 0, uri.toString())
+                    ?: return HttpResponse(
+                        head.statusCode,
+                        head.headers,
+                        byteArrayOf(),
+                        uri.toString()
+                    )
                 val redirected = uri.resolve(location)
                 validateRedirect(target, uri, redirected)
                 return request(
@@ -275,7 +449,7 @@ class ConnectivityDiagnostics {
             return HttpResponse(
                 statusCode = head.statusCode,
                 headers = head.headers,
-                bodyBytes = readBodySample(input),
+                body = readResponseBody(input, head.headers, target.maximumBodyBytes),
                 finalUrl = uri.toString()
             )
         }
@@ -308,15 +482,38 @@ class ConnectivityDiagnostics {
         )
     }
 
-    private fun readBodySample(input: InputStream): Int {
+    private fun readBodySample(input: InputStream, maximumBytes: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(1_024)
-        while (output.size() < MAX_BODY_BYTES) {
-            val count = input.read(buffer, 0, minOf(buffer.size, MAX_BODY_BYTES - output.size()))
+        while (output.size() < maximumBytes) {
+            val count = input.read(buffer, 0, minOf(buffer.size, maximumBytes - output.size()))
             if (count < 0) break
             output.write(buffer, 0, count)
         }
-        return output.size()
+        return output.toByteArray()
+    }
+
+    private fun readResponseBody(
+        input: InputStream,
+        headers: Map<String, String>,
+        maximumBytes: Int
+    ): ByteArray {
+        if (!headers["transfer-encoding"].orEmpty().contains("chunked", true)) {
+            return readBodySample(input, maximumBytes)
+        }
+        val output = ByteArrayOutputStream()
+        while (output.size() < maximumBytes) {
+            val size = readAsciiLine(input)
+                .substringBefore(';')
+                .trim()
+                .toIntOrNull(16)
+                ?: error("Некорректный chunked HTTP-ответ")
+            if (size == 0) break
+            val chunk = readExactly(input, size)
+            output.write(chunk, 0, minOf(chunk.size, maximumBytes - output.size()))
+            readAsciiLine(input)
+        }
+        return output.toByteArray()
     }
 
     internal fun classifyResponse(

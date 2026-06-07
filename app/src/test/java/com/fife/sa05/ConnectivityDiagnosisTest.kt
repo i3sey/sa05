@@ -48,6 +48,40 @@ class ConnectivityDiagnosisTest {
     }
 
     @Test
+    fun youtubeDoesNotAffectGeneralDpiScore() {
+        assertEquals(
+            1,
+            ConnectivityDiagnostics.bypassScore(
+                results("google", "youtube", "rule34")
+            )
+        )
+    }
+
+    @Test
+    fun youtubeAutoChecksWebMobileImagesAndVideoEndpoints() {
+        assertEquals(
+            setOf(
+                "youtube-player",
+                "youtube-web",
+                "youtube-mobile",
+                "youtube-images",
+                "youtube-video"
+            ),
+            ConnectivityDiagnostics.youtubeAutoTargets.mapTo(linkedSetOf()) { it.id }
+        )
+        assertTrue(
+            ConnectivityDiagnostics.youtubeAutoTargets.drop(1).all {
+                it.expectedStatus == 204 && it.minimumBodyBytes == 0
+            }
+        )
+        val player = ConnectivityDiagnostics.youtubeAutoTargets.first()
+        assertEquals("POST", player.method)
+        assertEquals(200, player.expectedStatus)
+        assertTrue(player.requestBody.contains("ANDROID"))
+        assertTrue(player.minimumBodyBytes >= 4_096)
+    }
+
+    @Test
     fun forbiddenResponseIsFailure() {
         val result = ConnectivityDiagnostics().classifyResponse(
             target = ConnectivityDiagnostics.target("rule34"),

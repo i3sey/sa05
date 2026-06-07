@@ -34,12 +34,7 @@ object VpnRuntimeState {
                         ?: VpnRunStatus.DISCONNECTED.name
                 )
             }.getOrDefault(VpnRunStatus.DISCONNECTED),
-            backend = runCatching {
-                VpnBackend.valueOf(
-                    prefs.getString(KEY_BACKEND, VpnBackend.XRAY.name)
-                        ?: VpnBackend.XRAY.name
-                )
-            }.getOrDefault(VpnBackend.XRAY),
+            backend = VpnBackend.fromStoredName(prefs.getString(KEY_BACKEND, null)),
             profileId = prefs.getString(KEY_PROFILE_ID, "").orEmpty(),
             profileName = prefs.getString(KEY_PROFILE_NAME, "").orEmpty()
         )
