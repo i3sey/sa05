@@ -51,6 +51,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -507,6 +508,7 @@ private fun ColumnScope.MainScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
+    var diagnosticsExpanded by rememberSaveable { mutableStateOf(true) }
     val runtime = remember(vpnState) { VpnRuntimeState.read(context) }
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -700,6 +702,10 @@ private fun ColumnScope.MainScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                TextButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) {
+                    Text(if (diagnosticsExpanded) "Свернуть" else "Развернуть")
+                }
+                Spacer(Modifier.width(8.dp))
                 Button(onClick = onRunDiagnostics, enabled = !diagnosticRunning) {
                     if (diagnosticRunning) {
                         CircularProgressIndicator(
@@ -712,7 +718,7 @@ private fun ColumnScope.MainScreen(
                     }
                 }
             }
-            if (diagnosticResults != null || diagnosticRunning) {
+            if (diagnosticsExpanded && (diagnosticResults != null || diagnosticRunning)) {
                 val results = diagnosticResults.orEmpty()
                 HorizontalDivider(Modifier.padding(vertical = 10.dp))
                 ConnectivityDiagnostics.targets.forEach { target ->
