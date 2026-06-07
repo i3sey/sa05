@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -136,23 +140,31 @@ class MainActivity : ComponentActivity() {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
-        requestVpnPermission()
+        requestSelectedBackendStart()
+    }
+
+    private fun requestSelectedBackendStart() {
+        if (XrayPreferences.vpnBackend(this) == VpnBackend.TELEGRAM) {
+            TelegramProxyService.start(this)
+        } else {
+            requestVpnPermission()
+        }
     }
 
     private fun requestVpnPermission() {
         val prepareIntent = VpnService.prepare(this)
-        if (prepareIntent == null) XrayVpnService.start(this)
+        if (prepareIntent == null) BackendController.startSelected(this)
         else vpnPermission.launch(prepareIntent)
     }
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            requestVpnPermission()
+            requestSelectedBackendStart()
         }
 
     private val vpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) XrayVpnService.start(this)
+            if (result.resultCode == RESULT_OK) BackendController.startSelected(this)
         }
 
     private fun consumeVpnRequest(intent: Intent?) {
@@ -214,14 +226,47 @@ private fun XrayScreen(
     var customZapretArguments by remember {
         mutableStateOf(XrayPreferences.zapretCustomArguments(context))
     }
+    var telegramCfEnabled by remember {
+        mutableStateOf(XrayPreferences.telegramCfEnabled(context))
+    }
+    var telegramCfDomain by remember {
+        mutableStateOf(XrayPreferences.telegramCfDomain(context))
+    }
     val scope = rememberCoroutineScope()
     val pingEngine = remember { XrayPingEngine(context.applicationContext) }
     val diagnostics = remember { ConnectivityDiagnostics() }
     val vpnState by XrayVpnService.state.collectAsState()
+    val telegramState by TelegramProxyService.state.collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
     val zapretAutoProgress by XrayVpnService.zapretAutoProgress.collectAsState()
     val verificationMessage by XrayVpnService.verificationMessage.collectAsState()
     val importUrl by subscriptionImport.collectAsState()
+    val backendState = if (selectedBackend == VpnBackend.TELEGRAM) {
+        telegramState
+    } else {
+        vpnState
+    }
+
+    fun applyTelegramProxy() {
+        val secret = XrayPreferences.telegramSecret(context)
+        val nativeIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse(TelegramProxyConfig.proxyUri(secret))
+        )
+        val opened = runCatching {
+            context.startActivity(nativeIntent)
+            true
+        }.getOrDefault(false)
+        if (!opened) {
+            context.startActivity(
+                Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse(TelegramProxyConfig.proxyUri(secret, webFallback = true))
+                )
+            )
+        }
+        XrayPreferences.markTelegramProxyApplied(context)
+    }
 
     fun updateSubscription(url: String, imported: Boolean = false) {
         if (updating) return
@@ -261,6 +306,14 @@ private fun XrayScreen(
             updateSubscription(it, imported = true)
         }
     }
+    LaunchedEffect(selectedBackend, telegramState) {
+        if (selectedBackend == VpnBackend.TELEGRAM &&
+            telegramState == XrayVpnService.STATE_CONNECTED &&
+            !XrayPreferences.telegramProxyApplied(context)
+        ) {
+            applyTelegramProxy()
+        }
+    }
     DisposableEffect(pingEngine) {
         onDispose { pingEngine.cancel() }
     }
@@ -278,7 +331,7 @@ private fun XrayScreen(
             when (screen) {
                 AppScreen.MAIN -> MainScreen(
                     subscription = subscription,
-                    vpnState = vpnState,
+                    vpnState = backendState,
                     updating = updating,
                     message = message,
                     diagnosticResults = diagnosticResults,
@@ -289,26 +342,35 @@ private fun XrayScreen(
                     verificationMessage = verificationMessage,
                     selectedBackend = selectedBackend,
                     zapretPreset = zapretPreset,
+                    telegramCfEnabled = telegramCfEnabled,
+                    telegramCfDomain = telegramCfDomain,
                     onRefresh = { updateSubscription(subscription.url) },
                     onSelect = { id ->
                         subscription = repository.setActiveProfile(id)
                         pingResults = emptyMap()
                     },
                     onToggleVpn = {
-                        if (vpnState == XrayVpnService.STATE_DISCONNECTED ||
-                            vpnState.startsWith("Ошибка:")
+                        val runtime = VpnRuntimeState.read(context)
+                        if (runtime.status == VpnRunStatus.DISCONNECTED ||
+                            backendState.startsWith("Ошибка:")
                         ) {
                             requestStart()
                         } else {
-                            XrayVpnService.stop(context)
+                            BackendController.stopRunning(context)
                         }
                     },
                     onSelectBackend = { backend ->
                         if (backend != selectedBackend) {
+                            val wasRunning =
+                                VpnRuntimeState.read(context).status != VpnRunStatus.DISCONNECTED
+                            if (wasRunning) BackendController.stopRunning(context)
                             selectedBackend = backend
                             XrayPreferences.saveVpnBackend(context, backend)
-                            if (vpnState != XrayVpnService.STATE_DISCONNECTED) {
-                                XrayVpnService.reconnect(context)
+                            if (wasRunning) {
+                                scope.launch {
+                                    delay(400)
+                                    requestStart()
+                                }
                             }
                         }
                     },
@@ -317,7 +379,7 @@ private fun XrayScreen(
                             zapretPreset = preset
                             XrayPreferences.saveZapretPreset(context, preset)
                             if (selectedBackend == VpnBackend.ZAPRET &&
-                                vpnState != XrayVpnService.STATE_DISCONNECTED
+                                backendState != XrayVpnService.STATE_DISCONNECTED
                             ) {
                                 XrayVpnService.reconnect(context)
                             }
@@ -326,7 +388,7 @@ private fun XrayScreen(
                     onRetryZapretAuto = {
                         XrayPreferences.clearZapretAutoCache(context)
                         message = if (selectedBackend == VpnBackend.ZAPRET &&
-                            vpnState != XrayVpnService.STATE_DISCONNECTED
+                            backendState != XrayVpnService.STATE_DISCONNECTED
                         ) {
                             XrayVpnService.reconnect(context)
                             "Повторный подбор стратегии..."
@@ -339,7 +401,8 @@ private fun XrayScreen(
                             diagnosticRunning = true
                             diagnosticResults = emptyList()
                             activeDiagnosticId = ConnectivityDiagnostics.targets.first().id
-                            val throughVpn = vpnState == XrayVpnService.STATE_CONNECTED
+                            val throughVpn = backendState == XrayVpnService.STATE_CONNECTED &&
+                                selectedBackend != VpnBackend.TELEGRAM
                             diagnosticRoute = if (throughVpn) {
                                 "backend; TUN активен · " +
                                     VpnRuntimeState.read(context).backend.title
@@ -387,6 +450,7 @@ private fun XrayScreen(
                         }
                         context.startActivity(intent)
                     },
+                    onApplyTelegram = { applyTelegramProxy() },
                     onSettings = { screen = AppScreen.SETTINGS }
                 )
                 AppScreen.SETTINGS -> SettingsScreen(
@@ -395,6 +459,8 @@ private fun XrayScreen(
                     updating = updating,
                     dynamicColor = dynamicColor,
                     customZapretArguments = customZapretArguments,
+                    telegramCfEnabled = telegramCfEnabled,
+                    telegramCfDomain = telegramCfDomain,
                     onBack = { screen = AppScreen.MAIN },
                     onUrlChanged = { urlDraft = it },
                     onUpdate = { updateSubscription(urlDraft) },
@@ -411,6 +477,33 @@ private fun XrayScreen(
                             message = "Параметры ByeDPI сохранены"
                         } catch (e: IllegalArgumentException) {
                             message = e.message ?: "Некорректные параметры ByeDPI"
+                        }
+                    },
+                    onTelegramCfEnabledChanged = {
+                        telegramCfEnabled = it
+                        XrayPreferences.saveTelegramCfEnabled(context, it)
+                        if (selectedBackend == VpnBackend.TELEGRAM &&
+                            backendState == XrayVpnService.STATE_CONNECTED
+                        ) {
+                            TelegramProxyService.stop(context)
+                            scope.launch {
+                                delay(400)
+                                TelegramProxyService.start(context)
+                            }
+                        }
+                    },
+                    onTelegramCfDomainChanged = { telegramCfDomain = it },
+                    onSaveTelegramCfDomain = {
+                        XrayPreferences.saveTelegramCfDomain(context, telegramCfDomain)
+                        message = "Настройки Telegram Proxy сохранены"
+                        if (selectedBackend == VpnBackend.TELEGRAM &&
+                            backendState == XrayVpnService.STATE_CONNECTED
+                        ) {
+                            TelegramProxyService.stop(context)
+                            scope.launch {
+                                delay(400)
+                                TelegramProxyService.start(context)
+                            }
                         }
                     },
                     onHosts = { screen = AppScreen.HOSTS },
@@ -496,6 +589,8 @@ private fun ColumnScope.MainScreen(
     verificationMessage: String,
     selectedBackend: VpnBackend,
     zapretPreset: ZapretPreset,
+    telegramCfEnabled: Boolean,
+    telegramCfDomain: String,
     onRefresh: () -> Unit,
     onSelect: (String) -> Unit,
     onToggleVpn: () -> Unit,
@@ -504,12 +599,13 @@ private fun ColumnScope.MainScreen(
     onRetryZapretAuto: () -> Unit,
     onRunDiagnostics: () -> Unit,
     onOpenTarget: (DiagnosticTarget) -> Unit,
+    onApplyTelegram: () -> Unit,
     onSettings: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
     var diagnosticsExpanded by rememberSaveable { mutableStateOf(true) }
-    val runtime = remember(vpnState) { VpnRuntimeState.read(context) }
+    val runtime = remember(vpnState, selectedBackend) { VpnRuntimeState.read(context) }
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -568,217 +664,270 @@ private fun ColumnScope.MainScreen(
         }
     }
     Spacer(Modifier.height(12.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        ExposedDropdownMenuBox(
-            expanded = menuExpanded,
-            onExpandedChange = {
-                val enabled = selectedBackend == VpnBackend.ZAPRET ||
-                    subscription.profiles.isNotEmpty()
-                if (enabled) menuExpanded = !menuExpanded
-            },
-            modifier = Modifier.weight(1f)
-        ) {
-            OutlinedTextField(
-                value = if (selectedBackend == VpnBackend.XRAY) {
-                    subscription.activeProfile?.remarks.orEmpty()
-                } else {
-                    zapretPreset.title
-                },
-                onValueChange = {},
-                readOnly = true,
-                enabled = selectedBackend == VpnBackend.ZAPRET ||
-                    subscription.profiles.isNotEmpty(),
-                singleLine = true,
-                label = {
-                    Text(if (selectedBackend == VpnBackend.XRAY) "Профиль" else "Стратегия")
-                },
-                trailingIcon = {
-                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuExpanded)
-                },
-                modifier = Modifier
-                    .menuAnchor()
-                    .fillMaxWidth()
-            )
-            ExposedDropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false }
-            ) {
-                if (selectedBackend == VpnBackend.XRAY) {
-                    subscription.profiles.forEach { profile ->
-                        DropdownMenuItem(
-                            text = { Text(profile.remarks) },
-                            onClick = {
-                                onSelect(profile.id)
-                                menuExpanded = false
-                            }
-                        )
-                    }
-                } else {
-                    ZapretPreset.selectable.forEach { preset ->
-                        DropdownMenuItem(
-                            text = { Text(preset.title) },
-                            onClick = {
-                                onSelectZapretPreset(preset)
-                                menuExpanded = false
-                            }
-                        )
-                    }
+    if (selectedBackend == VpnBackend.TELEGRAM) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Telegram WS Proxy", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Локальный MTProto-прокси 127.0.0.1:${TelegramProxyConfig.PORT}. " +
+                        "Работает только после применения в Telegram.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Text(
+                    if (telegramCfEnabled) {
+                        telegramCfDomain.ifBlank { "Cloudflare: автоматический домен" }
+                    } else {
+                        "Cloudflare выключен: прямое подключение к Telegram DC"
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                OutlinedButton(
+                    onClick = onApplyTelegram,
+                    enabled = vpnState == XrayVpnService.STATE_CONNECTED,
+                    modifier = Modifier.padding(top = 10.dp)
+                ) {
+                    Text("Применить в Telegram")
                 }
             }
         }
-        IconButton(
-            onClick = {
-                if (selectedBackend == VpnBackend.XRAY) onRefresh()
-                else onRetryZapretAuto()
-            },
-            enabled = if (selectedBackend == VpnBackend.XRAY) {
-                subscription.url.isNotBlank() && !updating
-            } else {
-                zapretPreset == ZapretPreset.AUTO
-            }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            if (selectedBackend == VpnBackend.XRAY && updating) {
-                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-            } else {
-                Icon(
-                    painterResource(R.drawable.ic_refresh),
-                    contentDescription = if (selectedBackend == VpnBackend.XRAY) {
-                        "Обновить подписку"
+            ExposedDropdownMenuBox(
+                expanded = menuExpanded,
+                onExpandedChange = {
+                    val enabled = selectedBackend == VpnBackend.ZAPRET ||
+                        subscription.profiles.isNotEmpty()
+                    if (enabled) menuExpanded = !menuExpanded
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                OutlinedTextField(
+                    value = if (selectedBackend == VpnBackend.XRAY) {
+                        subscription.activeProfile?.remarks.orEmpty()
                     } else {
-                        "Повторить подбор стратегии"
-                    }
+                        zapretPreset.title
+                    },
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = selectedBackend == VpnBackend.ZAPRET ||
+                        subscription.profiles.isNotEmpty(),
+                    singleLine = true,
+                    label = {
+                        Text(if (selectedBackend == VpnBackend.XRAY) "Профиль" else "Стратегия")
+                    },
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuExpanded)
+                    },
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth()
                 )
+                ExposedDropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    if (selectedBackend == VpnBackend.XRAY) {
+                        subscription.profiles.forEach { profile ->
+                            DropdownMenuItem(
+                                text = { Text(profile.remarks) },
+                                onClick = {
+                                    onSelect(profile.id)
+                                    menuExpanded = false
+                                }
+                            )
+                        }
+                    } else {
+                        ZapretPreset.selectable.forEach { preset ->
+                            DropdownMenuItem(
+                                text = { Text(preset.title) },
+                                onClick = {
+                                    onSelectZapretPreset(preset)
+                                    menuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            IconButton(
+                onClick = {
+                    if (selectedBackend == VpnBackend.XRAY) onRefresh()
+                    else onRetryZapretAuto()
+                },
+                enabled = if (selectedBackend == VpnBackend.XRAY) {
+                    subscription.url.isNotBlank() && !updating
+                } else {
+                    zapretPreset == ZapretPreset.AUTO
+                }
+            ) {
+                if (selectedBackend == VpnBackend.XRAY && updating) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        painterResource(R.drawable.ic_refresh),
+                        contentDescription = if (selectedBackend == VpnBackend.XRAY) {
+                            "Обновить подписку"
+                        } else {
+                            "Повторить подбор стратегии"
+                        }
+                    )
+                }
             }
         }
     }
     Spacer(Modifier.height(18.dp))
-    if (zapretAutoProgress.running) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp)) {
-                Text(
-                    "Подбор ByeDPI ${zapretAutoProgress.tested + 1}/${zapretAutoProgress.total}",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    listOf(zapretAutoProgress.preset, zapretAutoProgress.target)
-                        .filter(String::isNotBlank)
-                        .joinToString(" · "),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-    }
-    if (verificationMessage.isNotBlank()) {
-        Text(
-            verificationMessage,
-            color = if (verificationMessage.contains("не подтверждён")) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(bottom = 10.dp)
-        )
-    }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Проверка ограничений", style = MaterialTheme.typography.titleMedium)
+    if (selectedBackend != VpnBackend.TELEGRAM) {
+        if (zapretAutoProgress.running) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
                     Text(
-                        if (diagnosticRoute.isBlank()) {
-                            "Последовательная HTTPS-проверка"
-                        } else {
-                            "Маршрут: $diagnosticRoute"
-                        },
+                        "Подбор ByeDPI ${zapretAutoProgress.tested + 1}/${zapretAutoProgress.total}",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        listOf(zapretAutoProgress.preset, zapretAutoProgress.target)
+                            .filter(String::isNotBlank)
+                            .joinToString(" · "),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) {
-                    Text(if (diagnosticsExpanded) "Свернуть" else "Развернуть")
-                }
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = onRunDiagnostics, enabled = !diagnosticRunning) {
-                    if (diagnosticRunning) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text("Проверить")
-                    }
-                }
             }
-            if (diagnosticsExpanded && (diagnosticResults != null || diagnosticRunning)) {
-                val results = diagnosticResults.orEmpty()
-                HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                ConnectivityDiagnostics.targets.forEach { target ->
-                    val result = results.firstOrNull { it.target.id == target.id }
+            Spacer(Modifier.height(12.dp))
+        }
+        if (verificationMessage.isNotBlank()) {
+            Text(
+                verificationMessage,
+                color = if (verificationMessage.contains("не подтверждён")) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.padding(bottom = 10.dp)
+            )
+        }
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp)) {
+                Box(modifier = Modifier.fillMaxWidth()) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopStart),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(target.label)
-                            if (result != null &&
-                                result.status != DiagnosticStatus.SUCCESS &&
-                                result.error.isNotBlank()
-                            ) {
-                                Text(
-                                    result.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                            Text(
+                                "Проверка ограничений",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                if (diagnosticRoute.isBlank()) {
+                                    "Последовательная HTTPS-проверка"
+                                } else {
+                                    "Маршрут: $diagnosticRoute"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Button(onClick = onRunDiagnostics, enabled = !diagnosticRunning) {
+                            if (diagnosticRunning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text("Проверить")
+                            }
+                        }
+                    }
+                    IconButton(
+                        onClick = { diagnosticsExpanded = !diagnosticsExpanded },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(32.dp)
+                            .padding(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (diagnosticsExpanded) {
+                                Icons.Default.KeyboardArrowUp
+                            } else {
+                                Icons.Default.KeyboardArrowDown
+                            },
+                            contentDescription =
+                                if (diagnosticsExpanded) "Свернуть" else "Развернуть",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                if (diagnosticsExpanded && (diagnosticResults != null || diagnosticRunning)) {
+                    val results = diagnosticResults.orEmpty()
+                    HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                    ConnectivityDiagnostics.targets.forEach { target ->
+                        val result = results.firstOrNull { it.target.id == target.id }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(target.label)
+                                if (result != null &&
+                                    result.status != DiagnosticStatus.SUCCESS &&
+                                    result.error.isNotBlank()
+                                ) {
+                                    Text(
+                                        result.error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            TextButton(onClick = { onOpenTarget(target) }) {
+                                Text("Открыть")
+                            }
+                            when {
+                                activeDiagnosticId == target.id -> CircularProgressIndicator(
+                                    Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                result != null -> Text(
+                                    when (result.status) {
+                                        DiagnosticStatus.SUCCESS -> "✓"
+                                        DiagnosticStatus.FAILED -> "✕"
+                                        DiagnosticStatus.INCONCLUSIVE -> "!"
+                                    },
+                                    color = when (result.status) {
+                                        DiagnosticStatus.SUCCESS ->
+                                            MaterialTheme.colorScheme.primary
+                                        DiagnosticStatus.FAILED ->
+                                            MaterialTheme.colorScheme.error
+                                        DiagnosticStatus.INCONCLUSIVE ->
+                                            MaterialTheme.colorScheme.tertiary
+                                    },
+                                    style = MaterialTheme.typography.titleLarge
+                                )
+                                else -> Text(
+                                    "·",
+                                    color = MaterialTheme.colorScheme.outline,
+                                    style = MaterialTheme.typography.titleLarge
                                 )
                             }
                         }
-                        TextButton(onClick = { onOpenTarget(target) }) {
-                            Text("Открыть")
-                        }
-                        when {
-                            activeDiagnosticId == target.id -> CircularProgressIndicator(
-                                Modifier.size(20.dp),
-                                strokeWidth = 2.dp
-                            )
-                            result != null -> Text(
-                                when (result.status) {
-                                    DiagnosticStatus.SUCCESS -> "✓"
-                                    DiagnosticStatus.FAILED -> "✕"
-                                    DiagnosticStatus.INCONCLUSIVE -> "!"
-                                },
-                                color = when (result.status) {
-                                    DiagnosticStatus.SUCCESS ->
-                                        MaterialTheme.colorScheme.primary
-                                    DiagnosticStatus.FAILED ->
-                                        MaterialTheme.colorScheme.error
-                                    DiagnosticStatus.INCONCLUSIVE ->
-                                        MaterialTheme.colorScheme.tertiary
-                                },
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                            else -> Text(
-                                "·",
-                                color = MaterialTheme.colorScheme.outline,
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                        }
                     }
-                }
-                if (!diagnosticRunning && results.isNotEmpty()) {
-                    Text(
-                        ConnectivityDiagnosis.describe(results),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
+                    if (!diagnosticRunning && results.isNotEmpty()) {
+                        Text(
+                            ConnectivityDiagnosis.describe(results),
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
                 }
             }
         }
@@ -802,9 +951,9 @@ private fun ColumnScope.MainScreen(
             Icon(
                 painterResource(R.drawable.ic_power),
                 contentDescription = if (vpnState == XrayVpnService.STATE_CONNECTED) {
-                    "Отключить VPN"
+                    "Отключить"
                 } else {
-                    "Подключить VPN"
+                    "Подключить"
                 },
                 modifier = Modifier.size(30.dp)
             )
@@ -828,12 +977,17 @@ private fun ColumnScope.SettingsScreen(
     updating: Boolean,
     dynamicColor: Boolean,
     customZapretArguments: String,
+    telegramCfEnabled: Boolean,
+    telegramCfDomain: String,
     onBack: () -> Unit,
     onUrlChanged: (String) -> Unit,
     onUpdate: () -> Unit,
     onDynamicColorChanged: (Boolean) -> Unit,
     onCustomZapretArgumentsChanged: (String) -> Unit,
     onSaveCustomZapretArguments: () -> Unit,
+    onTelegramCfEnabledChanged: (Boolean) -> Unit,
+    onTelegramCfDomainChanged: (String) -> Unit,
+    onSaveTelegramCfDomain: () -> Unit,
     onHosts: () -> Unit,
     onExclusions: () -> Unit
 ) {
@@ -876,6 +1030,40 @@ private fun ColumnScope.SettingsScreen(
                     modifier = Modifier.padding(top = 8.dp)
                 ) {
                     Text("Сохранить параметры")
+                }
+            }
+            item {
+                Text("Telegram Proxy", style = MaterialTheme.typography.titleLarge)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Cloudflare", style = MaterialTheme.typography.titleMedium)
+                        Text("WebSocket-маршрут к Telegram DC")
+                    }
+                    Switch(
+                        checked = telegramCfEnabled,
+                        onCheckedChange = onTelegramCfEnabledChanged
+                    )
+                }
+                OutlinedTextField(
+                    value = telegramCfDomain,
+                    onValueChange = onTelegramCfDomainChanged,
+                    enabled = telegramCfEnabled,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    singleLine = true,
+                    label = { Text("Свой Cloudflare-домен (необязательно)") }
+                )
+                OutlinedButton(
+                    onClick = onSaveTelegramCfDomain,
+                    enabled = telegramCfEnabled,
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text("Сохранить Telegram Proxy")
                 }
             }
             item { SettingsLink("Хосты", "Пинг outbound-подключений", onHosts) }

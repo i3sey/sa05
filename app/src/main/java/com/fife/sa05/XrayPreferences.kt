@@ -3,6 +3,7 @@ package com.fife.sa05
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.SecureRandom
 
 object XrayPreferences {
     private const val FILE = "xray"
@@ -17,6 +18,10 @@ object XrayPreferences {
     private const val KEY_ZAPRET_CACHE_SCORE = "zapret_cache_score"
     private const val KEY_ZAPRET_CACHE_VERSION = "zapret_cache_version"
     private const val KEY_ZAPRET_CUSTOM_ARGUMENTS = "zapret_custom_arguments"
+    private const val KEY_TELEGRAM_CF_ENABLED = "telegram_cf_enabled"
+    private const val KEY_TELEGRAM_CF_DOMAIN = "telegram_cf_domain"
+    private const val KEY_TELEGRAM_SECRET = "telegram_secret"
+    private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
 
     private val defaultConfig = """
         {
@@ -91,6 +96,35 @@ object XrayPreferences {
     fun saveZapretCustomArguments(context: Context, value: String) {
         ZapretArguments.parse(value)
         prefs(context).edit().putString(KEY_ZAPRET_CUSTOM_ARGUMENTS, value.trim()).apply()
+    }
+
+    fun telegramCfEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_TELEGRAM_CF_ENABLED, true)
+
+    fun saveTelegramCfEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TELEGRAM_CF_ENABLED, enabled).apply()
+    }
+
+    fun telegramCfDomain(context: Context): String =
+        prefs(context).getString(KEY_TELEGRAM_CF_DOMAIN, "").orEmpty()
+
+    fun saveTelegramCfDomain(context: Context, domain: String) {
+        prefs(context).edit().putString(KEY_TELEGRAM_CF_DOMAIN, domain.trim()).apply()
+    }
+
+    fun telegramSecret(context: Context): String {
+        val current = prefs(context).getString(KEY_TELEGRAM_SECRET, "").orEmpty()
+        if (TelegramProxyConfig.isValidSecret(current)) return current
+        return TelegramProxyConfig.generateSecret().also {
+            prefs(context).edit().putString(KEY_TELEGRAM_SECRET, it).commit()
+        }
+    }
+
+    fun telegramProxyApplied(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_TELEGRAM_APPLIED, false)
+
+    fun markTelegramProxyApplied(context: Context) {
+        prefs(context).edit().putBoolean(KEY_TELEGRAM_APPLIED, true).apply()
     }
 
     fun zapretAutoCache(context: Context): ZapretAutoCache? {
@@ -188,4 +222,24 @@ object XrayPreferences {
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+}
+
+object TelegramProxyConfig {
+    const val PORT = 1443
+    const val POOL_SIZE = 4
+
+    fun isValidSecret(value: String): Boolean =
+        value.length == 32 && value.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
+
+    fun generateSecret(random: SecureRandom = SecureRandom()): String {
+        val bytes = ByteArray(16)
+        random.nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    fun proxyUri(secret: String, webFallback: Boolean = false): String {
+        require(isValidSecret(secret)) { "Некорректный секрет Telegram Proxy" }
+        val base = if (webFallback) "https://t.me/proxy" else "tg://proxy"
+        return "$base?server=127.0.0.1&port=$PORT&secret=dd$secret"
+    }
 }

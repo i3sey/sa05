@@ -30,3 +30,24 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Telegram WS Proxy Android
+
+- Project: https://github.com/amurcanov/tg-ws-proxy-android
+- Version: 1.2.0
+- Commit: `e35765af94c3d71c889a89701cc59553080ecb9a`
+- Binary: `app/src/main/jniLibs/arm64-v8a/libtgwsproxy.so`
+- Upstream APK: `v1.2.0-release-arm64-v8a.apk`
+- Upstream APK SHA-256:
+  `69274d876cfe7f139b96d1da601c5df7f65d1323722267f52d46f534240d509d`
+- Extracted binary SHA-256:
+  `cf003924a6792e9bc1548b424b5caa446bcabfd564741dbc43849ec9e19bd45c`
+- Corresponding source:
+  `third_party/tg-ws-proxy-android/tg-ws-proxy-android-1.2.0.tar.gz`
+- Source archive SHA-256:
+  `328409ea4dfcbc50eb3b9dbc24dec9535442a69d926b91e8fb2578fb7f71abba`
+- License: GPL-3.0
+
+The complete GPL-3.0 license is available in the repository root as `LICENSE`.
+The bundled source archive is the preferred source form published for the
+exact tagged release used by this application.

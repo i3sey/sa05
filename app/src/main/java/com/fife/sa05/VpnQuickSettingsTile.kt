@@ -21,19 +21,25 @@ class VpnQuickSettingsTile : TileService() {
         super.onClick()
         val runtime = VpnRuntimeState.read(this)
         if (runtime.status != VpnRunStatus.DISCONNECTED) {
+            BackendController.stopRunning(this)
             VpnRuntimeState.clear(this)
             renderTile(VpnRuntimeState.read(this))
-            XrayVpnService.stop(this)
             return
         }
 
+        val backend = XrayPreferences.vpnBackend(this)
         val notificationDenied = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
-        if (VpnService.prepare(this) == null && !notificationDenied) {
-            val backend = XrayPreferences.vpnBackend(this)
+        if (backend == VpnBackend.TELEGRAM &&
+            !XrayPreferences.telegramProxyApplied(this)
+        ) {
+            openAppForPermission()
+        } else if ((backend == VpnBackend.TELEGRAM || VpnService.prepare(this) == null) &&
+            !notificationDenied
+        ) {
             val selected = selectedLabel(backend)
             VpnRuntimeState.write(
                 this,
@@ -42,7 +48,7 @@ class VpnQuickSettingsTile : TileService() {
                 profileName = selected
             )
             renderTile(VpnRuntimeState.read(this))
-            XrayVpnService.start(this)
+            BackendController.startSelected(this)
         } else {
             openAppForPermission()
         }
@@ -61,7 +67,7 @@ class VpnQuickSettingsTile : TileService() {
             VpnRunStatus.CONNECTING -> Tile.STATE_ACTIVE
             VpnRunStatus.DISCONNECTED -> Tile.STATE_INACTIVE
         }
-        tile.label = "SA05 VPN"
+        tile.label = "SA05"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = when (runtime.status) {
                 VpnRunStatus.CONNECTED -> runtime.profileName.ifBlank { "Подключено" }
@@ -70,9 +76,9 @@ class VpnQuickSettingsTile : TileService() {
             }
         }
         tile.contentDescription = when (runtime.status) {
-            VpnRunStatus.CONNECTED -> "VPN подключён: ${runtime.profileName}"
-            VpnRunStatus.CONNECTING -> "VPN подключается: ${runtime.profileName}"
-            VpnRunStatus.DISCONNECTED -> "VPN отключён"
+            VpnRunStatus.CONNECTED -> "SA05 подключён: ${runtime.profileName}"
+            VpnRunStatus.CONNECTING -> "SA05 подключается: ${runtime.profileName}"
+            VpnRunStatus.DISCONNECTED -> "SA05 отключён"
         }
         tile.updateTile()
     }
@@ -82,6 +88,7 @@ class VpnQuickSettingsTile : TileService() {
             XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
                 .ifBlank { "Xray" }
         VpnBackend.ZAPRET -> XrayPreferences.zapretPreset(this).title
+        VpnBackend.TELEGRAM -> "Telegram WS Proxy"
     }
 
     @SuppressLint("StartActivityAndCollapseDeprecated")

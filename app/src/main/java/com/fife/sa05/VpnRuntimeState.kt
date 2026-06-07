@@ -70,6 +70,10 @@ object VpnRuntimeState {
         )
     }
 
+    fun clearIfBackend(context: Context, backend: VpnBackend) {
+        if (read(context).backend == backend) clear(context)
+    }
+
     fun requestTileRefresh(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             TileService.requestListeningState(

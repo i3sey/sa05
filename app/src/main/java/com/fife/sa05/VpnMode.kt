@@ -2,7 +2,8 @@ package com.fife.sa05
 
 enum class VpnBackend(val title: String) {
     XRAY("Xray"),
-    ZAPRET("Zapret (ByeDPI)")
+    ZAPRET("Zapret"),
+    TELEGRAM("Telegram")
 }
 
 enum class ZapretPreset(

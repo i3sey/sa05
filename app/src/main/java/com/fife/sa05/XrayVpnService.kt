@@ -115,6 +115,7 @@ class XrayVpnService : VpnService() {
                 val backend = when (runningBackend) {
                     VpnBackend.XRAY -> BackendStart(startXrayBackend())
                     VpnBackend.ZAPRET -> startZapretBackend()
+                    VpnBackend.TELEGRAM -> error("Telegram использует отдельный сервис")
                 }
                 check(generation == startGeneration.get()) { "Запуск отменён" }
                 _socksPort.value = backend.socksPort
@@ -142,7 +143,7 @@ class XrayVpnService : VpnService() {
                 stopProcesses()
                 runningProfile = null
                 runningLabel = ""
-                VpnRuntimeState.clear(this)
+                VpnRuntimeState.clearIfBackend(this, runningBackend)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -524,7 +525,7 @@ class XrayVpnService : VpnService() {
         _socksPort.value = null
         _zapretAutoProgress.value = ZapretAutoProgress()
         _verificationMessage.value = ""
-        VpnRuntimeState.clear(this)
+        VpnRuntimeState.clearIfBackend(this, runningBackend)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -543,6 +544,7 @@ class XrayVpnService : VpnService() {
     private fun selectedLabel(): String = when (runningBackend) {
         VpnBackend.XRAY -> runningProfile?.remarks.orEmpty().ifBlank { "Локальный профиль" }
         VpnBackend.ZAPRET -> XrayPreferences.zapretPreset(this).title
+        VpnBackend.TELEGRAM -> "Telegram WS Proxy"
     }
 
     private fun writeRuntime(status: VpnRunStatus) {
@@ -569,7 +571,7 @@ class XrayVpnService : VpnService() {
         _socksPort.value = null
         _zapretAutoProgress.value = ZapretAutoProgress()
         _verificationMessage.value = ""
-        VpnRuntimeState.clear(this)
+        VpnRuntimeState.clearIfBackend(this, runningBackend)
         super.onDestroy()
     }
 

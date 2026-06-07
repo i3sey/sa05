@@ -10,8 +10,9 @@ complete Xray configs. The selected profile is identified by `remarks`.
 
 ## Architecture
 
-1. `XrayVpnService` owns the single Android VPN and starts either the Xray or
-   Zapret (ByeDPI) backend.
+1. The app has three mutually exclusive backends: Xray, Zapret (ByeDPI), and
+   Telegram WS Proxy. `XrayVpnService` owns the Android VPN for Xray/Zapret;
+   `TelegramProxyService` runs a local MTProto proxy without a TUN.
 2. Xray must expose a loopback SOCKS inbound with UDP enabled.
 3. Android `VpnService` creates an IPv4 TUN (`10.10.10.1/30`).
 4. `libtun2socks.so` forwards TUN traffic to that SOCKS inbound.
@@ -50,6 +51,10 @@ complete Xray configs. The selected profile is identified by `remarks`.
     RuTracker 5xx responses are shown as inconclusive.
 15. Custom ByeDPI arguments are supported. The app always owns the loopback
     address and port and rejects daemon, pidfile, and transparent-mode overrides.
+16. Telegram mode listens on `127.0.0.1:1443` and must be applied in Telegram
+    through `tg://proxy`. It is not a general-purpose VPN or SOCKS proxy.
+17. Telegram mode uses Cloudflare WebSocket routing by default, supports an
+    optional custom Cloudflare domain, and generates its MTProto secret locally.
 
 ## Config contract
 
@@ -74,6 +79,9 @@ complete Xray configs. The selected profile is identified by `remarks`.
   transports including Reality, XHTTP, and Hysteria.
 - `libciadpi.so` is the unmodified static aarch64 executable from ByeDPI
   v0.17.3, packaged with a `.so` name so Android extracts it as executable.
+- `libtgwsproxy.so` is from Telegram WS Proxy Android v1.2.0 and is called
+  through JNA. Its corresponding GPLv3 source archive is bundled under
+  `third_party/tg-ws-proxy-android/`.
 - ByeDPI and zapret2 are MIT licensed. `nfqws2` is not used because its
   NFQUEUE/firewall integration requires root on normal Android devices.
 
@@ -124,3 +132,6 @@ app/build/outputs/apk/debug/app-debug.apk
   flow when Android authorization has not been granted yet.
 - Xray and Zapret share one app-exclusion list. Changing backend while connected
   reconnects the service immediately.
+- Telegram mode is mutually exclusive with Xray/Zapret. App exclusions and
+  restriction diagnostics do not apply because Telegram connects explicitly
+  to the local MTProto endpoint.
