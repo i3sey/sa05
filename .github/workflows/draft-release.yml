@@ -99,7 +99,13 @@ jobs:
             exit 1
           fi
           echo "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/sa05-release.jks"
-          printf 'RELEASE_KEYSTORE_FILE=%s\n' "$RUNNER_TEMP/sa05-release.jks" >> "$GITHUB_ENV"
+          {
+            printf 'RELEASE_KEYSTORE_FILE=%s\n' "$RUNNER_TEMP/sa05-release.jks"
+            printf 'RELEASE_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            printf 'RELEASE_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS"
+            printf 'RELEASE_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "Release signing configured."
 
       - name: Test
         run: ./gradlew testDebugUnitTest
