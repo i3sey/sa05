@@ -15,8 +15,13 @@ android {
         applicationId = "com.fife.sa05"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = providers.environmentVariable("VERSION_CODE")
+            .map(String::toInt)
+            .orElse(1)
+            .get()
+        versionName = providers.environmentVariable("VERSION_NAME")
+            .orElse("1.0")
+            .get()
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

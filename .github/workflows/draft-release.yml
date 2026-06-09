@@ -1,0 +1,109 @@
+name: Draft Android Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Version name, for example 1.0.1"
+        required: true
+        type: string
+      version_code:
+        description: "Android versionCode, must increase for each release"
+        required: true
+        type: number
+      changelog:
+        description: "Release changelog. Leave empty to use GitHub generated notes."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  draft-release:
+    name: Build APK and draft release
+    runs-on: ubuntu-latest
+
+    env:
+      VERSION_NAME: ${{ inputs.version_name }}
+      VERSION_CODE: ${{ inputs.version_code }}
+      TAG_NAME: v${{ inputs.version_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate version inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION_NAME" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z]+)?$ ]] || {
+            echo "version_name must look like 1.0, 1.0.1, or 1.0.1-beta1" >&2
+            exit 1
+          }
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]] || {
+            echo "version_code must be a positive integer" >&2
+            exit 1
+          }
+
+      - name: Test
+        run: ./gradlew testDebugUnitTest
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Prepare release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp app/build/outputs/apk/debug/app-debug.apk "release/sa05-${VERSION_NAME}-debug.apk"
+
+      - name: Write changelog
+        if: inputs.changelog != ''
+        shell: bash
+        run: |
+          cat > release-notes.md <<'CHANGELOG'
+          ${{ inputs.changelog }}
+          CHANGELOG
+
+      - name: Create draft release with changelog
+        if: inputs.changelog != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG_NAME" release/*.apk \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "SA05 $VERSION_NAME" \
+            --notes-file release-notes.md
+
+      - name: Create draft release with generated notes
+        if: inputs.changelog == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG_NAME" release/*.apk \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "SA05 $VERSION_NAME" \
+            --generate-notes
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sa05-${{ inputs.version_name }}-debug-apk
+          path: release/*.apk
+          if-no-files-found: error
