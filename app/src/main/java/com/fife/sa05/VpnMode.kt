@@ -1,8 +1,8 @@
 package com.fife.sa05
 
 enum class VpnBackend(val title: String) {
-    FULL_AUTO("Фулл авто"),
-    LOCAL_BYPASS("Локальный обход"),
+    FULL_AUTO("[BETA] Фулл авто"),
+    LOCAL_BYPASS("[BETA] Локальный обход"),
     PROXY_ONLY("Только прокси");
 
     val usesTelegram: Boolean
@@ -345,4 +345,7 @@ object ZapretAutoSelection {
         require(scores.isNotEmpty()) { "No tested presets" }
         return scores.maxBy { it.second }
     }
+
+    fun fallback(scores: List<Pair<ZapretPreset, Int>>): Pair<ZapretPreset, Int>? =
+        scores.filter { it.first != ZapretPreset.AUTO }.maxByOrNull { it.second }
 }

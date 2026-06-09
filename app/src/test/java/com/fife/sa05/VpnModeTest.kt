@@ -17,11 +17,20 @@ class VpnModeTest {
 
     @Test
     fun legacyModesMigrateToCompositeModes() {
+        assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName(null))
         assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName("XRAY"))
         assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("ZAPRET"))
         assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("TELEGRAM"))
         assertEquals(VpnBackend.FULL_AUTO, VpnBackend.fromStoredName("FULL_AUTO"))
         assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName("unknown"))
+    }
+
+    @Test
+    fun betaModesAreMarkedAndProxyOnlyIsDefaultStableMode() {
+        assertTrue(VpnBackend.FULL_AUTO.title.contains("[BETA]"))
+        assertTrue(VpnBackend.LOCAL_BYPASS.title.contains("[BETA]"))
+        assertEquals("Только прокси", VpnBackend.PROXY_ONLY.title)
+        assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName(null))
     }
 
     @Test
@@ -52,6 +61,33 @@ class VpnModeTest {
 
         assertEquals(ZapretPreset.DISORDER, result.first)
         assertEquals(3, result.second)
+    }
+
+    @Test
+    fun autoFallbackKeepsFirstPresetWithBestScore() {
+        val result = ZapretAutoSelection.fallback(
+            listOf(
+                ZapretPreset.ADAPTIVE to 1,
+                ZapretPreset.DISORDER to 2,
+                ZapretPreset.TLS_RECORD to 2
+            )
+        )
+
+        assertEquals(ZapretPreset.DISORDER, result?.first)
+        assertEquals(2, result?.second)
+    }
+
+    @Test
+    fun autoFallbackIgnoresAutoPreset() {
+        val result = ZapretAutoSelection.fallback(
+            listOf(
+                ZapretPreset.AUTO to 9,
+                ZapretPreset.ADAPTIVE to 1
+            )
+        )
+
+        assertEquals(ZapretPreset.ADAPTIVE, result?.first)
+        assertEquals(1, result?.second)
     }
 
     @Test

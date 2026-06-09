@@ -16,6 +16,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,11 +74,13 @@ class XrayVpnService : VpnService() {
 
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var startJob: Job? = null
+    private var fullAutoOptimizationJob: Job? = null
     private var tun: ParcelFileDescriptor? = null
     private var proxyProcess: Process? = null
     private var auxiliaryProcess: Process? = null
     private var bridgeProcess: Process? = null
     private var tun2socksProcess: Process? = null
+    private var xrayRuntime = XrayRuntime.STOPPED
     private var runningBackend = VpnBackend.PROXY_ONLY
     private var runningProfile: SubscriptionProfile? = null
     private var runningLabel = ""
@@ -86,6 +89,16 @@ class XrayVpnService : VpnService() {
     private val startGeneration = AtomicLong()
     private val startMutex = Mutex()
     private data class BackendStart(val socksPort: Int, val tunnelReady: Boolean = false)
+    private data class AutoPresetResolution(
+        val preset: ZapretPreset,
+        val verified: Boolean,
+        val score: Int
+    )
+    private enum class XrayRuntime {
+        STOPPED,
+        PLAIN_PROFILE,
+        FULL_AUTO_YOUTUBE
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -116,6 +129,7 @@ class XrayVpnService : VpnService() {
         writeRuntime(VpnRunStatus.CONNECTING)
         startForegroundNow(STATE_CONNECTING)
         startJob?.cancel()
+        fullAutoOptimizationJob?.cancel()
         val generation = startGeneration.incrementAndGet()
         startJob = scope.launch { startTunnel(generation) }
     }
@@ -145,10 +159,15 @@ class XrayVpnService : VpnService() {
                 _state.value = STATE_CONNECTED
                 writeRuntime(VpnRunStatus.CONNECTED)
                 startForegroundNow(STATE_CONNECTED)
-                if (runningBackend == VpnBackend.PROXY_ONLY ||
+                if (runningBackend == VpnBackend.FULL_AUTO) {
+                    launchFullAutoOptimization(generation, backend.socksPort)
+                } else if (runningBackend == VpnBackend.PROXY_ONLY ||
                     (runningBackend == VpnBackend.LOCAL_BYPASS &&
                         XrayPreferences.zapretPreset(this) != ZapretPreset.AUTO)
                 ) {
+                    verifyRunningTunnel()
+                }
+                if (runningBackend == VpnBackend.FULL_AUTO) {
                     verifyRunningTunnel()
                 }
             } catch (e: Exception) {
@@ -194,6 +213,11 @@ class XrayVpnService : VpnService() {
             .start()
         pipeLogs("xray", proxyProcess!!)
         waitForPort(proxyProcess!!, validated.socksPort, 10_000)
+        xrayRuntime = if (fullAuto) {
+            XrayRuntime.FULL_AUTO_YOUTUBE
+        } else {
+            XrayRuntime.PLAIN_PROFILE
+        }
         return validated.socksPort
     }
 
@@ -201,15 +225,25 @@ class XrayVpnService : VpnService() {
         val selected = XrayPreferences.zapretPreset(this)
         if (selected == ZapretPreset.AUTO) {
             val resolved = resolveAutoPreset()
-            runningLabel = "Авто → ${resolved.title} · Telegram"
-            _zapretAutoProgress.value = ZapretAutoProgress(
-                message = "Backend проверен, TUN запущен"
-            )
-            _verificationMessage.value =
-                "Backend проверен, TUN запущен; проверьте сайт кнопкой «Открыть»"
+            runningLabel = "[BETA] Авто → ${resolved.preset.title} · Telegram"
+            if (resolved.verified) {
+                _zapretAutoProgress.value = ZapretAutoProgress(
+                    message = "Backend проверен, TUN запущен"
+                )
+                _verificationMessage.value =
+                    "Backend проверен, TUN запущен; проверьте сайт кнопкой «Открыть»"
+            } else {
+                _zapretAutoProgress.value = ZapretAutoProgress(
+                    message = "Строгая проверка не прошла, используется лучший пресет"
+                )
+                _verificationMessage.value =
+                    "Строгая проверка не прошла: лучший результат " +
+                        "${resolved.score} из ${ConnectivityDiagnostics.dpiTargetIds.size}; " +
+                        "используется ${resolved.preset.title}"
+            }
             return BackendStart(ZAPRET_BRIDGE_PORT, tunnelReady = true)
         }
-        runningLabel = "${selected.title} · Telegram"
+        runningLabel = "[BETA] ${selected.title} · Telegram"
         _zapretAutoProgress.value = ZapretAutoProgress()
         proxyProcess = createZapretProcess(selected)
         pipeLogs("ByeDPI", proxyProcess!!)
@@ -218,7 +252,7 @@ class XrayVpnService : VpnService() {
         return BackendStart(ZAPRET_BRIDGE_PORT)
     }
 
-    private suspend fun resolveAutoPreset(): ZapretPreset {
+    private suspend fun resolveAutoPreset(): AutoPresetResolution {
         val networkKey = networkKey()
         val diagnostics = ConnectivityDiagnostics()
         _zapretAutoProgress.value = ZapretAutoProgress(
@@ -235,7 +269,7 @@ class XrayVpnService : VpnService() {
                 )
             }
         )
-        val cached = XrayPreferences.zapretAutoCache(this)
+        val cached = XrayPreferences.zapretAutoCache(this, networkKey)
             ?.takeIf {
                 it.networkKey == networkKey &&
                     it.algorithmVersion == ZAPRET_AUTO_ALGORITHM_VERSION
@@ -277,23 +311,34 @@ class XrayVpnService : VpnService() {
                             ZAPRET_AUTO_ALGORITHM_VERSION
                         )
                     )
-                    return preset
+                    return AutoPresetResolution(
+                        preset = preset,
+                        verified = true,
+                        score = score
+                    )
                 }
             } catch (e: Exception) {
                 Log.w("ByeDPI", "Preset ${preset.name} test failed", e)
-                scores += preset to 0
             } finally {
                 if (!candidatePassed) stopTransportProcesses()
             }
         }
-        val best = ZapretAutoSelection.best(scores)
-        _zapretAutoProgress.value = ZapretAutoProgress(
-            message = "Рабочая стратегия не найдена"
+        val best = ZapretAutoSelection.fallback(scores)
+            ?: error("ByeDPI не запустился ни с одной стратегией")
+        prepareZapretCandidate(best.first)
+        XrayPreferences.saveZapretAutoCache(
+            this,
+            ZapretAutoCache(
+                networkKey,
+                best.first,
+                best.second,
+                ZAPRET_AUTO_ALGORITHM_VERSION
+            )
         )
-        error(
-            "ByeDPI не прошёл проверку: лучший результат " +
-                "${best.second} из ${ConnectivityDiagnostics.dpiTargetIds.size}. " +
-                "Используйте Xray или свои параметры"
+        return AutoPresetResolution(
+            preset = best.first,
+            verified = false,
+            score = best.second
         )
     }
 
@@ -347,8 +392,43 @@ class XrayVpnService : VpnService() {
     }
 
     private suspend fun startFullAutoBackend(): BackendStart {
+        val socksPort = startXrayBackend(fullAuto = false)
+        runningLabel = "[BETA] ${selectedProfileLabel()} · Xray · Telegram"
+        _zapretAutoProgress.value = ZapretAutoProgress(
+            message = "VPN запущен через Xray, подбираем локальный обход"
+        )
+        _verificationMessage.value =
+            "VPN уже работает через Xray; YouTube-обход подбирается в фоне"
+        return BackendStart(socksPort)
+    }
+
+    private fun launchFullAutoOptimization(generation: Long, socksPort: Int) {
+        fullAutoOptimizationJob?.cancel()
+        fullAutoOptimizationJob = scope.launch {
+            runCatching {
+                optimizeFullAutoYoutube(generation, socksPort)
+            }.onFailure { error ->
+                if (error is CancellationException) return@onFailure
+                if (generation != startGeneration.get()) return@onFailure
+                Log.w("ByeDPI-YouTube", "Background optimization failed", error)
+                ensurePlainXrayRunning(socksPort)
+                stopFullAutoOptimizationProcesses()
+                XrayPreferences.clearYoutubeAutoCache(this@XrayVpnService)
+                runningLabel = "[BETA] ${selectedProfileLabel()} · YouTube через Xray · Telegram"
+                _zapretAutoProgress.value = ZapretAutoProgress(
+                    message = "Локальный обход не подошёл, используем Xray"
+                )
+                _verificationMessage.value =
+                    "YouTube оставлен через Xray: локальные стратегии не прошли проверку"
+                writeRuntime(VpnRunStatus.CONNECTED)
+                startForegroundNow(STATE_CONNECTED)
+            }
+        }
+    }
+
+    private suspend fun optimizeFullAutoYoutube(generation: Long, socksPort: Int) {
         val networkKey = networkKey()
-        val cached = XrayPreferences.youtubeAutoCache(this)
+        val cached = XrayPreferences.youtubeAutoCache(this, networkKey)
             ?.takeIf {
                 it.networkKey == networkKey &&
                     it.algorithmVersion == YOUTUBE_AUTO_ALGORITHM_VERSION
@@ -368,8 +448,9 @@ class XrayVpnService : VpnService() {
                 message = "Проверяем полный маршрут YouTube"
             )
             startForegroundNow("YouTube: стратегия ${index + 1}/${candidates.size}")
-            stopFullAutoCandidate()
+            stopFullAutoOptimizationProcesses()
             try {
+                check(generation == startGeneration.get()) { "Запуск отменён" }
                 auxiliaryProcess = createZapretProcess(preset)
                 pipeLogs("ByeDPI-YouTube", auxiliaryProcess!!)
                 waitForPort(auxiliaryProcess!!, ZAPRET_SOCKS_PORT, 3_000)
@@ -382,7 +463,7 @@ class XrayVpnService : VpnService() {
                     "Preflight: ${preflight.error.ifBlank { "YouTube недоступен" }}"
                 }
                 startZapretBridge()
-                val socksPort = startXrayBackend(fullAuto = true)
+                switchXrayToFullAuto(socksPort, generation)
                 _zapretAutoProgress.value = _zapretAutoProgress.value.copy(
                     target = "YouTube Media"
                 )
@@ -426,47 +507,49 @@ class XrayVpnService : VpnService() {
                     )
                 )
                 runningLabel =
-                    "${selectedProfileLabel()} · YouTube: ${preset.title} · Telegram"
+                    "[BETA] ${selectedProfileLabel()} · YouTube: ${preset.title} · Telegram"
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "YouTube работает через Xray → ByeDPI"
                 )
                 _verificationMessage.value =
                     "YouTube проверен через локальный обход: ${preset.title}"
-                return BackendStart(socksPort)
+                writeRuntime(VpnRunStatus.CONNECTED)
+                startForegroundNow(STATE_CONNECTED)
+                return
             } catch (e: Exception) {
                 Log.w("ByeDPI-YouTube", "Preset ${preset.name} failed", e)
-                stopFullAutoCandidate()
+                ensurePlainXrayRunning(socksPort)
+                stopFullAutoOptimizationProcesses()
             }
         }
-        XrayPreferences.clearYoutubeAutoCache(this)
-        stopFullAutoCandidate()
-        runningLabel = "${selectedProfileLabel()} · YouTube через Xray · Telegram"
-        _zapretAutoProgress.value = ZapretAutoProgress(
-            message = "Локальный обход не подошёл, используем Xray"
-        )
-        _verificationMessage.value =
-            "YouTube переключён на Xray: локальные стратегии не прошли проверку"
+        error("Локальный YouTube-обход не прошёл проверку")
+    }
+
+    private suspend fun switchXrayToFullAuto(expectedSocksPort: Int, generation: Long) {
+        check(generation == startGeneration.get()) { "Запуск отменён" }
+        closeProcess(proxyProcess)
+        proxyProcess = null
+        xrayRuntime = XrayRuntime.STOPPED
+        try {
+            val socksPort = startXrayBackend(fullAuto = true)
+            check(socksPort == expectedSocksPort) {
+                "SOCKS-порт Xray изменился с $expectedSocksPort на $socksPort"
+            }
+        } catch (e: Exception) {
+            ensurePlainXrayRunning(expectedSocksPort)
+            throw e
+        }
+    }
+
+    private suspend fun ensurePlainXrayRunning(expectedSocksPort: Int) {
+        if (isProcessAlive(proxyProcess) && xrayRuntime == XrayRuntime.PLAIN_PROFILE) return
+        closeProcess(proxyProcess)
+        proxyProcess = null
+        xrayRuntime = XrayRuntime.STOPPED
         val socksPort = startXrayBackend(fullAuto = false)
-        val xrayPlayer = ConnectivityDiagnostics().runSocks(
-            socksPort,
-            resolveForSocks = false,
-            targetsToTest = listOf(ConnectivityDiagnostics.youtubeAutoTargets.first())
-        ).single()
-        val xrayPlayback = if (xrayPlayer.reachable) {
-            ConnectivityDiagnostics().probeYoutubePlaybackSocks(
-                socksPort,
-                resolveForSocks = false
-            )
-        } else {
-            xrayPlayer
+        check(socksPort == expectedSocksPort) {
+            "SOCKS-порт Xray изменился с $expectedSocksPort на $socksPort"
         }
-        _verificationMessage.value = if (xrayPlayback.reachable) {
-            "YouTube переключён на Xray, видеопоток работает"
-        } else {
-            "YouTube переключён на Xray, но ${xrayPlayback.target.label}: " +
-                xrayPlayback.error.ifBlank { "недоступен" }
-        }
-        return BackendStart(socksPort)
     }
 
     private suspend fun startTelegramProxy() {
@@ -694,6 +777,8 @@ class XrayVpnService : VpnService() {
     private fun stopTunnel() {
         startGeneration.incrementAndGet()
         startJob?.cancel()
+        fullAutoOptimizationJob?.cancel()
+        fullAutoOptimizationJob = null
         stopProcesses()
         runningProfile = null
         runningLabel = ""
@@ -707,6 +792,8 @@ class XrayVpnService : VpnService() {
     }
 
     private fun stopProcesses() {
+        fullAutoOptimizationJob?.cancel()
+        fullAutoOptimizationJob = null
         stopTransportProcesses()
         if (telegramStarted) {
             telegramStarted = false
@@ -715,9 +802,7 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun stopFullAutoCandidate() {
-        closeProcess(proxyProcess)
-        proxyProcess = null
+    private fun stopFullAutoOptimizationProcesses() {
         closeProcess(bridgeProcess)
         bridgeProcess = null
         closeProcess(auxiliaryProcess)
@@ -731,6 +816,7 @@ class XrayVpnService : VpnService() {
         bridgeProcess = null
         closeProcess(proxyProcess)
         proxyProcess = null
+        xrayRuntime = XrayRuntime.STOPPED
         closeProcess(auxiliaryProcess)
         auxiliaryProcess = null
         runCatching { tun?.close() }
@@ -740,8 +826,8 @@ class XrayVpnService : VpnService() {
     private fun selectedLabel(): String = when (runningBackend) {
         VpnBackend.PROXY_ONLY -> selectedProfileLabel()
         VpnBackend.LOCAL_BYPASS ->
-            "${XrayPreferences.zapretPreset(this).title} · Telegram"
-        VpnBackend.FULL_AUTO -> "${selectedProfileLabel()} · локальный обход"
+            "[BETA] ${XrayPreferences.zapretPreset(this).title} · Telegram"
+        VpnBackend.FULL_AUTO -> "[BETA] ${selectedProfileLabel()} · локальный обход"
     }
 
     private fun selectedProfileLabel(): String =

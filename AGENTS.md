@@ -77,6 +77,11 @@ complete Xray configs. The selected profile is identified by `remarks`.
     valid Xray profile. The saved authorization is reused later without a
     mandatory online check, but VPN start paths still refuse to run when no
     valid cached subscription exists.
+22. Full Auto starts immediately through the selected provider Xray profile
+    and performs YouTube/ByeDPI optimization in the background. The Android
+    VPN, TUN, and tun2socks come up before the optimization finishes, and the
+    service only swaps the runtime Xray config after a candidate passes the
+    full route checks.
 
 ## Config contract
 

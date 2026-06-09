@@ -772,8 +772,8 @@ private fun AuthScreen(
 }
 
 private fun VpnBackend.clientTitle(): String = when (this) {
-    VpnBackend.FULL_AUTO -> "Автоматически"
-    VpnBackend.LOCAL_BYPASS -> "Локальный обход"
+    VpnBackend.FULL_AUTO -> "[BETA] Автоматически"
+    VpnBackend.LOCAL_BYPASS -> "[BETA] Локальный обход"
     VpnBackend.PROXY_ONLY -> "Только прокси"
 }
 
@@ -873,7 +873,7 @@ private fun RedesignedMainScreen(
                     Column {
                         Text(subscription.title.ifBlank { "SA05" })
                         Text(
-                            "Простой VPN-клиент",
+                            "Тестовый VPN-клиент",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

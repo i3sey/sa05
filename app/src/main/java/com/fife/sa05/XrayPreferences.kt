@@ -17,14 +17,17 @@ object XrayPreferences {
     private const val KEY_ZAPRET_CACHE_PRESET = "zapret_cache_preset"
     private const val KEY_ZAPRET_CACHE_SCORE = "zapret_cache_score"
     private const val KEY_ZAPRET_CACHE_VERSION = "zapret_cache_version"
+    private const val KEY_ZAPRET_CACHE_MAP = "zapret_cache_map"
     private const val KEY_YOUTUBE_CACHE_NETWORK = "youtube_cache_network"
     private const val KEY_YOUTUBE_CACHE_PRESET = "youtube_cache_preset"
     private const val KEY_YOUTUBE_CACHE_VERSION = "youtube_cache_version"
+    private const val KEY_YOUTUBE_CACHE_MAP = "youtube_cache_map"
     private const val KEY_ZAPRET_CUSTOM_ARGUMENTS = "zapret_custom_arguments"
     private const val KEY_TELEGRAM_CF_ENABLED = "telegram_cf_enabled"
     private const val KEY_TELEGRAM_CF_DOMAIN = "telegram_cf_domain"
     private const val KEY_TELEGRAM_SECRET = "telegram_secret"
     private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
+    private const val MAX_NETWORK_CACHE_ENTRIES = 16
 
     private val defaultConfig = """
         {
@@ -133,6 +136,95 @@ object XrayPreferences {
     }
 
     fun zapretAutoCache(context: Context): ZapretAutoCache? {
+        return readZapretAutoCaches(context).lastOrNull()
+    }
+
+    fun zapretAutoCache(context: Context, networkKey: String): ZapretAutoCache? {
+        return readZapretAutoCaches(context).lastOrNull { it.networkKey == networkKey }
+    }
+
+    fun saveZapretAutoCache(context: Context, cache: ZapretAutoCache) {
+        val caches = upsertCache(readZapretAutoCaches(context), cache)
+        prefs(context).edit()
+            .putString(KEY_ZAPRET_CACHE_MAP, encodeAutoCacheMap(caches))
+            .remove(KEY_ZAPRET_CACHE_NETWORK)
+            .remove(KEY_ZAPRET_CACHE_PRESET)
+            .remove(KEY_ZAPRET_CACHE_SCORE)
+            .remove(KEY_ZAPRET_CACHE_VERSION)
+            .apply()
+    }
+
+    fun clearZapretAutoCache(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_ZAPRET_CACHE_MAP)
+            .remove(KEY_ZAPRET_CACHE_NETWORK)
+            .remove(KEY_ZAPRET_CACHE_PRESET)
+            .remove(KEY_ZAPRET_CACHE_SCORE)
+            .remove(KEY_ZAPRET_CACHE_VERSION)
+            .apply()
+    }
+
+    fun youtubeAutoCache(context: Context): ZapretAutoCache? {
+        return readYoutubeAutoCaches(context).lastOrNull()
+    }
+
+    fun youtubeAutoCache(context: Context, networkKey: String): ZapretAutoCache? {
+        return readYoutubeAutoCaches(context).lastOrNull { it.networkKey == networkKey }
+    }
+
+    fun saveYoutubeAutoCache(context: Context, cache: ZapretAutoCache) {
+        val caches = upsertCache(readYoutubeAutoCaches(context), cache)
+        prefs(context).edit()
+            .putString(KEY_YOUTUBE_CACHE_MAP, encodeAutoCacheMap(caches))
+            .remove(KEY_YOUTUBE_CACHE_NETWORK)
+            .remove(KEY_YOUTUBE_CACHE_PRESET)
+            .remove(KEY_YOUTUBE_CACHE_VERSION)
+            .apply()
+    }
+
+    fun clearYoutubeAutoCache(context: Context) {
+        prefs(context).edit()
+            .remove(KEY_YOUTUBE_CACHE_MAP)
+            .remove(KEY_YOUTUBE_CACHE_NETWORK)
+            .remove(KEY_YOUTUBE_CACHE_PRESET)
+            .remove(KEY_YOUTUBE_CACHE_VERSION)
+            .apply()
+    }
+
+    private fun readZapretAutoCaches(context: Context): List<ZapretAutoCache> {
+        val preferences = prefs(context)
+        val caches = decodeAutoCacheMap(preferences.getString(KEY_ZAPRET_CACHE_MAP, null))
+            .toMutableList()
+        legacyZapretAutoCache(context)?.let { legacy ->
+            if (caches.none { it.networkKey == legacy.networkKey }) caches += legacy
+            preferences.edit()
+                .putString(KEY_ZAPRET_CACHE_MAP, encodeAutoCacheMap(caches))
+                .remove(KEY_ZAPRET_CACHE_NETWORK)
+                .remove(KEY_ZAPRET_CACHE_PRESET)
+                .remove(KEY_ZAPRET_CACHE_SCORE)
+                .remove(KEY_ZAPRET_CACHE_VERSION)
+                .apply()
+        }
+        return caches
+    }
+
+    private fun readYoutubeAutoCaches(context: Context): List<ZapretAutoCache> {
+        val preferences = prefs(context)
+        val caches = decodeAutoCacheMap(preferences.getString(KEY_YOUTUBE_CACHE_MAP, null))
+            .toMutableList()
+        legacyYoutubeAutoCache(context)?.let { legacy ->
+            if (caches.none { it.networkKey == legacy.networkKey }) caches += legacy
+            preferences.edit()
+                .putString(KEY_YOUTUBE_CACHE_MAP, encodeAutoCacheMap(caches))
+                .remove(KEY_YOUTUBE_CACHE_NETWORK)
+                .remove(KEY_YOUTUBE_CACHE_PRESET)
+                .remove(KEY_YOUTUBE_CACHE_VERSION)
+                .apply()
+        }
+        return caches
+    }
+
+    private fun legacyZapretAutoCache(context: Context): ZapretAutoCache? {
         val preferences = prefs(context)
         val network = preferences.getString(KEY_ZAPRET_CACHE_NETWORK, "").orEmpty()
         if (network.isBlank()) return null
@@ -146,25 +238,7 @@ object XrayPreferences {
         )
     }
 
-    fun saveZapretAutoCache(context: Context, cache: ZapretAutoCache) {
-        prefs(context).edit()
-            .putString(KEY_ZAPRET_CACHE_NETWORK, cache.networkKey)
-            .putString(KEY_ZAPRET_CACHE_PRESET, cache.preset.name)
-            .putInt(KEY_ZAPRET_CACHE_SCORE, cache.reachableCount)
-            .putInt(KEY_ZAPRET_CACHE_VERSION, cache.algorithmVersion)
-            .apply()
-    }
-
-    fun clearZapretAutoCache(context: Context) {
-        prefs(context).edit()
-            .remove(KEY_ZAPRET_CACHE_NETWORK)
-            .remove(KEY_ZAPRET_CACHE_PRESET)
-            .remove(KEY_ZAPRET_CACHE_SCORE)
-            .remove(KEY_ZAPRET_CACHE_VERSION)
-            .apply()
-    }
-
-    fun youtubeAutoCache(context: Context): ZapretAutoCache? {
+    private fun legacyYoutubeAutoCache(context: Context): ZapretAutoCache? {
         val preferences = prefs(context)
         val network = preferences.getString(KEY_YOUTUBE_CACHE_NETWORK, "").orEmpty()
         if (network.isBlank()) return null
@@ -178,20 +252,59 @@ object XrayPreferences {
         )
     }
 
-    fun saveYoutubeAutoCache(context: Context, cache: ZapretAutoCache) {
-        prefs(context).edit()
-            .putString(KEY_YOUTUBE_CACHE_NETWORK, cache.networkKey)
-            .putString(KEY_YOUTUBE_CACHE_PRESET, cache.preset.name)
-            .putInt(KEY_YOUTUBE_CACHE_VERSION, cache.algorithmVersion)
-            .apply()
+    internal fun upsertCache(
+        caches: List<ZapretAutoCache>,
+        cache: ZapretAutoCache,
+        maxEntries: Int = MAX_NETWORK_CACHE_ENTRIES
+    ): List<ZapretAutoCache> {
+        require(maxEntries > 0)
+        return (caches.filter { it.networkKey != cache.networkKey } + cache)
+            .takeLast(maxEntries)
     }
 
-    fun clearYoutubeAutoCache(context: Context) {
-        prefs(context).edit()
-            .remove(KEY_YOUTUBE_CACHE_NETWORK)
-            .remove(KEY_YOUTUBE_CACHE_PRESET)
-            .remove(KEY_YOUTUBE_CACHE_VERSION)
-            .apply()
+    internal fun decodeAutoCacheMap(
+        raw: String?,
+        maxEntries: Int = MAX_NETWORK_CACHE_ENTRIES
+    ): List<ZapretAutoCache> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return try {
+            val root = JSONObject(raw)
+            root.keys().asSequence().mapNotNull { network ->
+                val entry = root.optJSONObject(network) ?: return@mapNotNull null
+                entry.optInt("order", 0) to ZapretAutoCache(
+                    networkKey = network,
+                    preset = ZapretPreset.fromName(
+                        entry.optString("preset")
+                    ).takeUnless { it == ZapretPreset.AUTO } ?: return@mapNotNull null,
+                    reachableCount = entry.optInt("reachableCount", 0),
+                    algorithmVersion = entry.optInt("algorithmVersion", 0)
+                )
+            }.sortedBy { it.first }.map { it.second }.toList().takeLast(maxEntries)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    internal fun encodeAutoCacheMap(
+        caches: List<ZapretAutoCache>,
+        maxEntries: Int = MAX_NETWORK_CACHE_ENTRIES
+    ): String {
+        val root = JSONObject()
+        upsertCache(caches, caches.lastOrNull() ?: return root.toString(), maxEntries)
+            .forEachIndexed { index, cache ->
+                if (cache.networkKey.isBlank() || cache.preset == ZapretPreset.AUTO) {
+                    return@forEachIndexed
+                }
+                root.put(
+                    cache.networkKey,
+                    JSONObject()
+                        .put("preset", cache.preset.name)
+                        .put("reachableCount", cache.reachableCount)
+                        .put("algorithmVersion", cache.algorithmVersion)
+                        .put("order", index)
+                )
+            }
+        return root.toString()
     }
 
     fun subscription(context: Context): SubscriptionState {

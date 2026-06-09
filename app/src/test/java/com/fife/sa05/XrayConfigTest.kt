@@ -154,6 +154,14 @@ class XrayConfigTest {
     }
 
     @Test
+    fun fullAutoKeepsProviderSocksPort() {
+        val validated = XrayConfig.validate(config)
+        val runtime = XrayConfig.buildFullAutoConfig(config, 10811)
+
+        assertEquals(validated.socksPort, runtime.socksPort)
+    }
+
+    @Test
     fun fullAutoEnablesSniffingAndAvoidsProviderTagCollisions() {
         val root = JSONObject(config)
         root.getJSONArray("outbounds")

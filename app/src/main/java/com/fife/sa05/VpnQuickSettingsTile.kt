@@ -95,9 +95,9 @@ class VpnQuickSettingsTile : TileService() {
             XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
                 .ifBlank { "Xray" }
         VpnBackend.LOCAL_BYPASS ->
-            "${XrayPreferences.zapretPreset(this).title} + Telegram"
+            "[BETA] ${XrayPreferences.zapretPreset(this).title} + Telegram"
         VpnBackend.FULL_AUTO ->
-            XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
+            "[BETA] " + XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
                 .ifBlank { "Xray" } + " + локальный обход"
     }
 
