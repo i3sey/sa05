@@ -7,6 +7,8 @@ import android.net.VpnService
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -258,6 +260,7 @@ private fun XrayScreen(
     val scope = rememberCoroutineScope()
     val pingEngine = remember { XrayPingEngine(context.applicationContext) }
     val diagnostics = remember { ConnectivityDiagnostics() }
+    val appUpdateRepository = remember { AppUpdateRepository(context.applicationContext) }
     val vpnState by XrayVpnService.state.collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
     val zapretAutoProgress by XrayVpnService.zapretAutoProgress.collectAsState()
@@ -266,6 +269,8 @@ private fun XrayScreen(
     val backendState = vpnState
     val snackbarHostState = remember { SnackbarHostState() }
     val authorized = SubscriptionAuth.isAuthorized(subscription)
+    var updateState by remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun applyTelegramProxy() {
         val secret = XrayPreferences.telegramSecret(context)
@@ -315,7 +320,66 @@ private fun XrayScreen(
         }
     }
 
+    fun checkAppUpdate(notify: Boolean = false) {
+        scope.launch {
+            updateState = AppUpdateState.Checking
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    appUpdateRepository.checkLatestRelease(
+                        BuildConfig.VERSION_CODE,
+                        BuildConfig.VERSION_NAME
+                    )
+                }
+            } catch (e: Exception) {
+                AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
+            }
+            updateState = result
+            if (notify && result is AppUpdateState.Available) {
+                message = "Доступна версия ${result.release.versionName}"
+            }
+        }
+    }
+
+    fun downloadAppUpdate(release: AppRelease) {
+        scope.launch {
+            updateState = AppUpdateState.Available(release, downloadProgress = 0)
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    appUpdateRepository.downloadRelease(release) { progress ->
+                        mainHandler.post {
+                            updateState = AppUpdateState.Available(
+                                release = release,
+                                downloadedPath = null,
+                                downloadProgress = progress
+                            )
+                        }
+                    }
+                }
+                updateState = AppUpdateState.Available(
+                    release = release,
+                    downloadedPath = file.absolutePath
+                )
+            } catch (e: Exception) {
+                updateState = AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    fun installDownloadedUpdate(path: String) {
+        val file = java.io.File(path)
+        if (!file.exists()) {
+            updateState = AppUpdateState.Error("APK не найден")
+            return
+        }
+        if (!AppUpdateInstaller.canInstallPackages(context)) {
+            context.startActivity(AppUpdateInstaller.unknownSourcesIntent(context))
+            return
+        }
+        context.startActivity(AppUpdateInstaller.installIntent(context, file))
+    }
+
     LaunchedEffect(Unit) {
+        checkAppUpdate(notify = true)
         if (subscription.url.isNotBlank() && importUrl == null) {
             updateSubscription(subscription.url)
         }
@@ -605,7 +669,15 @@ private fun XrayScreen(
                     },
                     onHosts = { screen = AppScreen.HOSTS },
                     onExclusions = { screen = AppScreen.EXCLUSIONS },
-                    onAdvanced = { screen = AppScreen.ADVANCED }
+                    onAdvanced = { screen = AppScreen.ADVANCED },
+                    updateState = updateState,
+                    canInstallPackages = AppUpdateInstaller.canInstallPackages(context),
+                    onCheckUpdate = { checkAppUpdate() },
+                    onDownloadUpdate = { downloadAppUpdate(it) },
+                    onInstallUpdate = { installDownloadedUpdate(it) },
+                    onOpenUnknownSources = {
+                        context.startActivity(AppUpdateInstaller.unknownSourcesIntent(context))
+                    }
                 )
                 AppScreen.ADVANCED -> AdvancedSettingsScreen(
                     customZapretArguments = customZapretArguments,
@@ -1648,6 +1720,8 @@ private fun ColumnScope.SettingsScreen(
     customZapretArguments: String,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
+    updateState: AppUpdateState,
+    canInstallPackages: Boolean,
     onBack: () -> Unit,
     onUrlChanged: (String) -> Unit,
     onUpdate: () -> Unit,
@@ -1659,13 +1733,29 @@ private fun ColumnScope.SettingsScreen(
     onSaveTelegramCfDomain: () -> Unit,
     onHosts: () -> Unit,
     onExclusions: () -> Unit,
-    onAdvanced: () -> Unit
+    onAdvanced: () -> Unit,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: (AppRelease) -> Unit,
+    onInstallUpdate: (String) -> Unit,
+    onOpenUnknownSources: () -> Unit
 ) {
     ContentScreen(title = "Настройки", onBack = onBack) {
         LazyColumn(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item {
+                AppUpdateCard(
+                    currentVersionName = BuildConfig.VERSION_NAME,
+                    currentVersionCode = BuildConfig.VERSION_CODE,
+                    updateState = updateState,
+                    canInstallPackages = canInstallPackages,
+                    onCheckUpdate = onCheckUpdate,
+                    onDownloadUpdate = onDownloadUpdate,
+                    onInstallUpdate = onInstallUpdate,
+                    onOpenUnknownSources = onOpenUnknownSources
+                )
+            }
             item {
                 Text("Подписка", style = MaterialTheme.typography.titleLarge)
                 OutlinedTextField(
