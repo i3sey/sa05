@@ -61,22 +61,39 @@ jobs:
             echo "version_code must be a positive integer" >&2
             exit 1
           }
-          : "${ANDROID_RELEASE_KEYSTORE_BASE64:?Missing signing secret ANDROID_RELEASE_KEYSTORE_BASE64}"
-          : "${ANDROID_RELEASE_KEYSTORE_PASSWORD:?Missing signing secret ANDROID_RELEASE_KEYSTORE_PASSWORD}"
-          : "${ANDROID_RELEASE_KEY_ALIAS:?Missing signing secret ANDROID_RELEASE_KEY_ALIAS}"
-          : "${ANDROID_RELEASE_KEY_PASSWORD:?Missing signing secret ANDROID_RELEASE_KEY_PASSWORD}"
 
-      - name: Decode signing key
+      - name: Configure signing key
         shell: bash
         run: |
           set -euo pipefail
+          signing_values=(
+            "$ANDROID_RELEASE_KEYSTORE_BASE64"
+            "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            "$ANDROID_RELEASE_KEY_ALIAS"
+            "$ANDROID_RELEASE_KEY_PASSWORD"
+          )
+          present=0
+          for value in "${signing_values[@]}"; do
+            if [[ -n "$value" ]]; then
+              present=$((present + 1))
+            fi
+          done
+          if [[ "$present" -eq 0 ]]; then
+            echo "Release signing secrets are not configured; building with debug signing fallback."
+            exit 0
+          fi
+          if [[ "$present" -ne 4 ]]; then
+            echo "Configure all signing secrets or leave all of them empty:" >&2
+            echo "ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_KEYSTORE_PASSWORD, ANDROID_RELEASE_KEY_ALIAS, ANDROID_RELEASE_KEY_PASSWORD" >&2
+            exit 1
+          fi
           echo "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/sa05-release.jks"
           printf 'RELEASE_KEYSTORE_FILE=%s\n' "$RUNNER_TEMP/sa05-release.jks" >> "$GITHUB_ENV"
 
       - name: Test
         run: ./gradlew testDebugUnitTest
 
-      - name: Build signed release APK
+      - name: Build release APK
         run: ./gradlew assembleRelease
 
       - name: Prepare release asset
