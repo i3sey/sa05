@@ -101,6 +101,13 @@ class XrayVpnService : VpnService() {
     }
 
     private fun beginStart() {
+        if (!SubscriptionAuth.isAuthorized(this)) {
+            _state.value = "Ошибка: нужна действующая подписка"
+            _socksPort.value = null
+            VpnRuntimeState.clear(this)
+            stopSelf()
+            return
+        }
         runningBackend = XrayPreferences.vpnBackend(this)
         runningProfile = XrayPreferences.subscription(this).activeProfile
             .takeIf { runningBackend.usesXrayProfile }

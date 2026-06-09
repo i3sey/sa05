@@ -72,6 +72,11 @@ complete Xray configs. The selected profile is identified by `remarks`.
     through `tg://proxy`. It is not a general-purpose SOCKS proxy.
 20. TG WS Proxy uses Cloudflare WebSocket routing by default, supports an
     optional custom Cloudflare domain, and generates its MTProto secret locally.
+21. App access is gated by a valid subscription. A user is authorized only
+    after one successful HTTPS subscription import that returns at least one
+    valid Xray profile. The saved authorization is reused later without a
+    mandatory online check, but VPN start paths still refuse to run when no
+    valid cached subscription exists.
 
 ## Config contract
 
@@ -152,6 +157,8 @@ app/build/outputs/apk/debug/app-debug.apk
   policy or replace this with a narrower package discovery flow.
 - Subscription URL/config cache is excluded from Android cloud and device
   transfer backup because URLs may contain access tokens.
+- Fresh installs show only the subscription login screen. Deep links can
+  authorize the app if the imported HTTPS URL validates successfully.
 - Material You is user-configurable and enabled by default. Android 12+ uses
   wallpaper colors; older systems and disabled dynamic color use the fallback
   ocean/sand/coral palette.

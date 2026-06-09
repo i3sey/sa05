@@ -28,6 +28,11 @@ class VpnQuickSettingsTile : TileService() {
         }
 
         val backend = XrayPreferences.vpnBackend(this)
+        if (!SubscriptionAuth.isAuthorized(this)) {
+            renderTile(VpnRuntimeState.read(this))
+            openAppForPermission()
+            return
+        }
         val notificationDenied = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
                 this,
@@ -42,7 +47,11 @@ class VpnQuickSettingsTile : TileService() {
                 profileName = selected
             )
             renderTile(VpnRuntimeState.read(this))
-            BackendController.startSelected(this)
+            if (!BackendController.startSelected(this)) {
+                VpnRuntimeState.clear(this)
+                renderTile(VpnRuntimeState.read(this))
+                openAppForPermission()
+            }
         } else {
             openAppForPermission()
         }
@@ -66,7 +75,11 @@ class VpnQuickSettingsTile : TileService() {
             tile.subtitle = when (runtime.status) {
                 VpnRunStatus.CONNECTED -> runtime.profileName.ifBlank { "Подключено" }
                 VpnRunStatus.CONNECTING -> runtime.profileName.ifBlank { "Подключение" }
-                VpnRunStatus.DISCONNECTED -> selected.ifBlank { "Отключено" }
+                VpnRunStatus.DISCONNECTED -> if (SubscriptionAuth.isAuthorized(this)) {
+                    selected.ifBlank { "Отключено" }
+                } else {
+                    "Нужна ссылка"
+                }
             }
         }
         tile.contentDescription = when (runtime.status) {
