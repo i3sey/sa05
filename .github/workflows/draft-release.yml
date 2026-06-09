@@ -15,6 +15,11 @@ on:
         description: "Release changelog"
         required: false
         type: string
+      allow_debug_signing:
+        description: "Allow debug signing fallback. Do not use for real releases."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -32,6 +37,7 @@ jobs:
       ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
       ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
       ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      ALLOW_DEBUG_SIGNING: ${{ inputs.allow_debug_signing }}
 
     steps:
       - name: Checkout
@@ -79,8 +85,13 @@ jobs:
             fi
           done
           if [[ "$present" -eq 0 ]]; then
-            echo "Release signing secrets are not configured; building with debug signing fallback."
-            exit 0
+            if [[ "$ALLOW_DEBUG_SIGNING" == "true" ]]; then
+              echo "Release signing secrets are not configured; building with debug signing fallback."
+              exit 0
+            fi
+            echo "Release signing secrets are not configured. Refusing to create a real release with debug signing." >&2
+            echo "Set all signing secrets, or rerun with allow_debug_signing=true for a test APK." >&2
+            exit 1
           fi
           if [[ "$present" -ne 4 ]]; then
             echo "Configure all signing secrets or leave all of them empty:" >&2
@@ -95,6 +106,21 @@ jobs:
 
       - name: Build release APK
         run: ./gradlew assembleRelease
+
+      - name: Verify release signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/apk-signing.txt"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          "$apksigner" verify \
+            --verbose \
+            --print-certs \
+            app/build/outputs/apk/release/app-release.apk | tee "$report"
+          if grep -q "CN=Android Debug" "$report"; then
+            echo "APK is signed with the Android debug certificate. Refusing to create a release." >&2
+            exit 1
+          fi
 
       - name: Prepare release asset
         shell: bash
