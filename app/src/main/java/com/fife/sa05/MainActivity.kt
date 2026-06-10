@@ -403,7 +403,8 @@ private fun XrayScreen(
     }
     BackHandler(enabled = screen != AppScreen.MAIN) {
         screen = when (screen) {
-            AppScreen.HOSTS, AppScreen.EXCLUSIONS, AppScreen.ADVANCED -> AppScreen.SETTINGS
+            AppScreen.HOSTS, AppScreen.ADVANCED -> AppScreen.SETTINGS
+            AppScreen.EXCLUSIONS -> AppScreen.MAIN
             else -> AppScreen.MAIN
         }
     }
@@ -556,6 +557,7 @@ private fun XrayScreen(
                     },
                     onApplyTelegram = { applyTelegramProxy() },
                     onDiagnostics = { screen = AppScreen.DIAGNOSTICS },
+                    onExclusions = { screen = AppScreen.EXCLUSIONS },
                     onSettings = { screen = AppScreen.SETTINGS }
                 )
                 AppScreen.DIAGNOSTICS -> ContentScreen(
@@ -668,7 +670,6 @@ private fun XrayScreen(
                         }
                     },
                     onHosts = { screen = AppScreen.HOSTS },
-                    onExclusions = { screen = AppScreen.EXCLUSIONS },
                     onAdvanced = { screen = AppScreen.ADVANCED },
                     updateState = updateState,
                     canInstallPackages = AppUpdateInstaller.canInstallPackages(context),
@@ -756,7 +757,7 @@ private fun XrayScreen(
                 }
                 AppScreen.EXCLUSIONS -> ContentScreen(
                     title = "Исключения",
-                    onBack = { screen = AppScreen.SETTINGS }
+                    onBack = { screen = AppScreen.MAIN }
                 ) {
                     AppExclusionList(
                         apps = apps,
@@ -890,6 +891,7 @@ private fun RedesignedMainScreen(
     onRetryZapretAuto: () -> Unit,
     onApplyTelegram: () -> Unit,
     onDiagnostics: () -> Unit,
+    onExclusions: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1014,6 +1016,13 @@ private fun RedesignedMainScreen(
                 title = "Режим",
                 subtitle = selectedBackend.clientTitle(),
                 onClick = { modeSheetVisible = true }
+            )
+        }
+        item {
+            SettingsLink(
+                title = "Исключения",
+                subtitle = "Приложения с прямым доступом",
+                onClick = onExclusions
             )
         }
         item {
@@ -1206,6 +1215,7 @@ private fun ColumnScope.MainScreen(
     onOpenTarget: (DiagnosticTarget) -> Unit,
     onApplyTelegram: () -> Unit,
     onDiagnostics: () -> Unit,
+    onExclusions: () -> Unit,
     onSettings: () -> Unit
 ) {
     RedesignedMainScreen(
@@ -1226,6 +1236,7 @@ private fun ColumnScope.MainScreen(
         onRetryZapretAuto = onRetryZapretAuto,
         onApplyTelegram = onApplyTelegram,
         onDiagnostics = onDiagnostics,
+        onExclusions = onExclusions,
         onSettings = onSettings,
         modifier = Modifier.weight(1f)
     )
@@ -1732,7 +1743,6 @@ private fun ColumnScope.SettingsScreen(
     onTelegramCfDomainChanged: (String) -> Unit,
     onSaveTelegramCfDomain: () -> Unit,
     onHosts: () -> Unit,
-    onExclusions: () -> Unit,
     onAdvanced: () -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: (AppRelease) -> Unit,
@@ -1774,13 +1784,6 @@ private fun ColumnScope.SettingsScreen(
                 }
             }
             item { SettingsLink("Хосты", "Пинг outbound-подключений", onHosts) }
-            item {
-                SettingsLink(
-                    "Исключения",
-                    "Приложения с прямым доступом",
-                    onExclusions
-                )
-            }
             item {
                 SettingsLink(
                     "Расширенные параметры",
