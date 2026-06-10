@@ -1042,20 +1042,6 @@ private fun RedesignedMainScreen(
             )
         }
         item {
-            SettingsLink(
-                title = "Исключения",
-                subtitle = "Приложения с прямым доступом",
-                onClick = onExclusions
-            )
-        }
-        item {
-            SettingsLink(
-                title = "Проверить обновление",
-                subtitle = appUpdateSummary(updateState),
-                onClick = onCheckUpdate
-            )
-        }
-        item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier
@@ -1137,6 +1123,20 @@ private fun RedesignedMainScreen(
                     }
                 }
             }
+        }
+        item {
+            SettingsLink(
+                title = "Исключения",
+                subtitle = "Приложения с прямым доступом",
+                onClick = onExclusions
+            )
+        }
+        item {
+            SettingsLink(
+                title = "Проверить обновление",
+                subtitle = appUpdateSummary(updateState),
+                onClick = onCheckUpdate
+            )
         }
         if (zapretAutoProgress.running) {
             item {
