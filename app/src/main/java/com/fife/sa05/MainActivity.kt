@@ -270,6 +270,7 @@ private fun XrayScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val authorized = SubscriptionAuth.isAuthorized(subscription)
     var updateState by remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
+    var updateDownloadSession by remember { mutableStateOf(0L) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun applyTelegramProxy() {
@@ -351,27 +352,33 @@ private fun XrayScreen(
 
     fun downloadAppUpdate(release: AppRelease) {
         scope.launch {
+            val sessionId = ++updateDownloadSession
             updateState = AppUpdateState.Available(release, downloadProgress = 0)
             try {
                 val file = withContext(Dispatchers.IO) {
                     appUpdateRepository.downloadRelease(release) { progress ->
-                        if (progress < 100) {
+                        if (progress < 100 && sessionId == updateDownloadSession) {
                             mainHandler.post {
-                                updateState = AppUpdateState.Available(
-                                    release = release,
-                                    downloadedPath = null,
-                                    downloadProgress = progress
-                                )
+                                if (sessionId == updateDownloadSession) {
+                                    updateState = AppUpdateState.Available(
+                                        release = release,
+                                        downloadedPath = null,
+                                        downloadProgress = progress
+                                    )
+                                }
                             }
                         }
                     }
                 }
+                if (sessionId != updateDownloadSession) return@launch
                 updateState = AppUpdateState.Available(
                     release = release,
                     downloadedPath = file.absolutePath
                 )
             } catch (e: Exception) {
-                updateState = AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
+                if (sessionId == updateDownloadSession) {
+                    updateState = AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
+                }
             }
         }
     }

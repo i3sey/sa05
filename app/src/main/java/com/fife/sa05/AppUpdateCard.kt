@@ -84,7 +84,11 @@ fun AppUpdateCard(
                             modifier = Modifier.fillMaxWidth()
                         )
                         Text(
-                            "Загрузка $progress%",
+                            if (progress >= 99) {
+                                "Почти готово"
+                            } else {
+                                "Загрузка $progress%"
+                            },
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
