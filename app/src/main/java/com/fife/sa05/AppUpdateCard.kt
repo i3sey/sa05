@@ -34,6 +34,7 @@ fun AppUpdateCard(
     onInstallUpdate: (String) -> Unit,
     onOpenUnknownSources: () -> Unit
 ) {
+    val checking = updateState == AppUpdateState.Checking
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -96,8 +97,8 @@ fun AppUpdateCard(
                                     Text("Скачать")
                                 }
                             downloadedPath.isNullOrBlank() ->
-                                OutlinedButton(onClick = onCheckUpdate) {
-                                    Text("Ждём загрузку")
+                                OutlinedButton(onClick = {}, enabled = false) {
+                                    Text("Загружаем")
                                 }
                             canInstallPackages ->
                                 Button(
@@ -113,13 +114,17 @@ fun AppUpdateCard(
                                 Text("Разрешить установку")
                             }
                         }
-                        OutlinedButton(onClick = onCheckUpdate) {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Проверить снова")
-                        }
                     }
                 }
+            }
+            OutlinedButton(
+                onClick = onCheckUpdate,
+                enabled = !checking,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (checking) "Проверяем..." else "Проверить обновление")
             }
         }
     }

@@ -334,8 +334,17 @@ private fun XrayScreen(
                 AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
             }
             updateState = result
-            if (notify && result is AppUpdateState.Available) {
-                message = "Доступна версия ${result.release.versionName}"
+            if (notify) {
+                if (result is AppUpdateState.Available) {
+                    message = "Доступна версия ${result.release.versionName}"
+                }
+            } else {
+                message = when (result) {
+                    is AppUpdateState.Available -> "Доступна версия ${result.release.versionName}"
+                    AppUpdateState.UpToDate -> "Установлена актуальная версия"
+                    is AppUpdateState.Error -> "Ошибка проверки: ${result.message}"
+                    else -> message
+                }
             }
         }
     }
@@ -346,12 +355,14 @@ private fun XrayScreen(
             try {
                 val file = withContext(Dispatchers.IO) {
                     appUpdateRepository.downloadRelease(release) { progress ->
-                        mainHandler.post {
-                            updateState = AppUpdateState.Available(
-                                release = release,
-                                downloadedPath = null,
-                                downloadProgress = progress
-                            )
+                        if (progress < 100) {
+                            mainHandler.post {
+                                updateState = AppUpdateState.Available(
+                                    release = release,
+                                    downloadedPath = null,
+                                    downloadProgress = progress
+                                )
+                            }
                         }
                     }
                 }
@@ -445,6 +456,7 @@ private fun XrayScreen(
                     zapretPreset = zapretPreset,
                     telegramCfEnabled = telegramCfEnabled,
                     telegramCfDomain = telegramCfDomain,
+                    updateState = updateState,
                     onRefresh = { updateSubscription(subscription.url) },
                     onSelect = { id ->
                         subscription = repository.setActiveProfile(id)
@@ -558,6 +570,7 @@ private fun XrayScreen(
                     onApplyTelegram = { applyTelegramProxy() },
                     onDiagnostics = { screen = AppScreen.DIAGNOSTICS },
                     onExclusions = { screen = AppScreen.EXCLUSIONS },
+                    onCheckUpdate = { checkAppUpdate() },
                     onSettings = { screen = AppScreen.SETTINGS }
                 )
                 AppScreen.DIAGNOSTICS -> ContentScreen(
@@ -871,6 +884,14 @@ private fun connectionDescription(vpnState: String, runtime: VpnRuntimeSnapshot)
     else -> "Выберите режим и нажмите кнопку подключения"
 }
 
+private fun appUpdateSummary(updateState: AppUpdateState): String = when (updateState) {
+    AppUpdateState.Idle -> "Проверить GitHub Releases"
+    AppUpdateState.Checking -> "Проверяем последнюю версию"
+    AppUpdateState.UpToDate -> "Установлена актуальная версия"
+    is AppUpdateState.Available -> "Доступна версия ${updateState.release.versionName}"
+    is AppUpdateState.Error -> "Ошибка: ${updateState.message}"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RedesignedMainScreen(
@@ -883,6 +904,7 @@ private fun RedesignedMainScreen(
     zapretPreset: ZapretPreset,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
+    updateState: AppUpdateState,
     onRefresh: () -> Unit,
     onSelect: (String) -> Unit,
     onToggleVpn: () -> Unit,
@@ -892,6 +914,7 @@ private fun RedesignedMainScreen(
     onApplyTelegram: () -> Unit,
     onDiagnostics: () -> Unit,
     onExclusions: () -> Unit,
+    onCheckUpdate: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1023,6 +1046,13 @@ private fun RedesignedMainScreen(
                 title = "Исключения",
                 subtitle = "Приложения с прямым доступом",
                 onClick = onExclusions
+            )
+        }
+        item {
+            SettingsLink(
+                title = "Проверить обновление",
+                subtitle = appUpdateSummary(updateState),
+                onClick = onCheckUpdate
             )
         }
         item {
@@ -1205,6 +1235,7 @@ private fun ColumnScope.MainScreen(
     zapretPreset: ZapretPreset,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
+    updateState: AppUpdateState,
     onRefresh: () -> Unit,
     onSelect: (String) -> Unit,
     onToggleVpn: () -> Unit,
@@ -1216,6 +1247,7 @@ private fun ColumnScope.MainScreen(
     onApplyTelegram: () -> Unit,
     onDiagnostics: () -> Unit,
     onExclusions: () -> Unit,
+    onCheckUpdate: () -> Unit,
     onSettings: () -> Unit
 ) {
     RedesignedMainScreen(
@@ -1228,6 +1260,7 @@ private fun ColumnScope.MainScreen(
         zapretPreset = zapretPreset,
         telegramCfEnabled = telegramCfEnabled,
         telegramCfDomain = telegramCfDomain,
+        updateState = updateState,
         onRefresh = onRefresh,
         onSelect = onSelect,
         onToggleVpn = onToggleVpn,
@@ -1237,6 +1270,7 @@ private fun ColumnScope.MainScreen(
         onApplyTelegram = onApplyTelegram,
         onDiagnostics = onDiagnostics,
         onExclusions = onExclusions,
+        onCheckUpdate = onCheckUpdate,
         onSettings = onSettings,
         modifier = Modifier.weight(1f)
     )
