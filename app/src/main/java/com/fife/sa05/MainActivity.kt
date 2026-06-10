@@ -577,7 +577,13 @@ private fun XrayScreen(
                     onApplyTelegram = { applyTelegramProxy() },
                     onDiagnostics = { screen = AppScreen.DIAGNOSTICS },
                     onExclusions = { screen = AppScreen.EXCLUSIONS },
-                    onCheckUpdate = { checkAppUpdate() },
+                    onCheckUpdate = {
+                        if (updateState is AppUpdateState.Available) {
+                            screen = AppScreen.SETTINGS
+                        } else {
+                            checkAppUpdate()
+                        }
+                    },
                     onSettings = { screen = AppScreen.SETTINGS }
                 )
                 AppScreen.DIAGNOSTICS -> ContentScreen(
