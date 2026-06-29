@@ -107,12 +107,6 @@ class ConnectivityDiagnostics {
                 informationalOnly = true
             ),
             DiagnosticTarget(
-                id = "rule34",
-                label = "Rule34",
-                url = "https://rule34.xxx/",
-                group = DiagnosticGroup.DPI
-            ),
-            DiagnosticTarget(
                 id = "kinozal",
                 label = "Kinozal",
                 url = "https://kinozal.tv/",
