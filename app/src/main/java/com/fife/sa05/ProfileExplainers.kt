@@ -30,10 +30,13 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 internal data class ProfileOutboundInfo(
     val tag: String,
@@ -191,9 +194,9 @@ internal fun ProfileExplainer(
         if (info.balancers.isEmpty()) {
             ProfileRouteCard(primary)
         } else {
-            info.balancers.forEach { balancer ->
+            info.balancers.forEachIndexed { index, balancer ->
+                if (index > 0) Spacer(Modifier.height(10.dp))
                 BalancerRouteCard(balancer)
-                Spacer(Modifier.height(10.dp))
             }
         }
     }
@@ -219,7 +222,6 @@ private fun ProfileRouteCard(outbound: ProfileOutboundInfo) {
             ProfileRouteAnimation(outbound)
         }
     }
-    Spacer(Modifier.height(10.dp))
 }
 
 @Composable
@@ -372,18 +374,18 @@ private fun ProfileRouteAnimation(outbound: ProfileOutboundInfo) {
                 )
             }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top
+        RouteObjectLabels(
+            positions = listOf(0f, 0.5f, 1f),
+            edgeInset = 20.dp,
+            modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 "Устройство",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
+                maxLines = 1
             )
             Column(
-                modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
@@ -405,7 +407,7 @@ private fun ProfileRouteAnimation(outbound: ProfileOutboundInfo) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.End,
-                modifier = Modifier.weight(1f)
+                maxLines = 1
             )
         }
     }
@@ -525,18 +527,19 @@ private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
                 drawCircle(protectedWire, 4.dp.toPx(), point)
             }
         }
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            listOf("Устройство", "Балансер", "VPN-серверы", "Интернет").forEachIndexed { index, label ->
+        RouteObjectLabels(
+            positions = listOf(0f, 0.31f, 0.66f, 1f),
+            edgeInset = 16.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            listOf("Устройство", "Балансер", "VPN-серверы", "Интернет").forEach { label ->
                 Text(
                     label,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = when (index) {
-                        0 -> TextAlign.Start
-                        3 -> TextAlign.End
-                        else -> TextAlign.Center
-                    },
-                    modifier = Modifier.weight(1f)
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -571,6 +574,41 @@ private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteObjectLabels(
+    positions: List<Float>,
+    edgeInset: Dp,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Layout(content = content, modifier = modifier) { measurables, constraints ->
+        require(measurables.size == positions.size)
+        val labelMaxWidth = (constraints.maxWidth / positions.size).coerceAtLeast(1)
+        val labelConstraints = constraints.copy(
+            minWidth = 0,
+            minHeight = 0,
+            maxWidth = labelMaxWidth
+        )
+        val placeables = measurables.map { it.measure(labelConstraints) }
+        val height = placeables.maxOfOrNull { it.height } ?: 0
+        val insetPx = edgeInset.roundToPx()
+
+        layout(constraints.maxWidth, height) {
+            placeables.forEachIndexed { index, placeable ->
+                val position = positions[index].coerceIn(0f, 1f)
+                val anchorX = when (index) {
+                    0 -> insetPx
+                    positions.lastIndex -> constraints.maxWidth - insetPx
+                    else -> (constraints.maxWidth * position).roundToInt()
+                }
+                val x = (anchorX - placeable.width / 2)
+                    .coerceIn(0, constraints.maxWidth - placeable.width)
+                placeable.place(x, 0)
             }
         }
     }

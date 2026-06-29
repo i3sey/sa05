@@ -156,9 +156,9 @@ fun StrategyExplainer(preset: ZapretPreset, modifier: Modifier = Modifier) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        primitives.forEach { primitive ->
+        primitives.forEachIndexed { index, primitive ->
+            if (index > 0) Spacer(Modifier.height(10.dp))
             PrimitiveCard(primitive)
-            Spacer(Modifier.height(10.dp))
         }
     }
 }

@@ -62,6 +62,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -87,6 +88,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -1086,6 +1088,9 @@ private fun RedesignedMainScreen(
                                         serverRemark.flag?.let { FlagBadge(it) }
                                     }
                                 },
+                                colors = ListItemDefaults.colors(
+                                    containerColor = Color.Transparent
+                                ),
                                 modifier = Modifier.clickable {
                                     onSelect(profile.id)
                                     profileSheetVisible = false
@@ -1100,6 +1105,7 @@ private fun RedesignedMainScreen(
                                     profile = profile,
                                     modifier = Modifier.padding(
                                         start = 24.dp,
+                                        top = 8.dp,
                                         end = 24.dp,
                                         bottom = 8.dp
                                     )
@@ -1143,6 +1149,9 @@ private fun RedesignedMainScreen(
                                         )
                                     }
                                 },
+                                colors = ListItemDefaults.colors(
+                                    containerColor = Color.Transparent
+                                ),
                                 modifier = Modifier.clickable {
                                     onSelectZapretPreset(preset)
                                     profileSheetVisible = false
@@ -1157,6 +1166,7 @@ private fun RedesignedMainScreen(
                                     preset = preset,
                                     modifier = Modifier.padding(
                                         start = 24.dp,
+                                        top = 8.dp,
                                         end = 24.dp,
                                         bottom = 8.dp
                                     )
