@@ -33,12 +33,33 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.expandVertically
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.fife.sa05.ui.theme.Motion
+import com.fife.sa05.ui.theme.backTransform
+import com.fife.sa05.ui.theme.clickableScale
+import com.fife.sa05.ui.theme.expandFadeIn
+import com.fife.sa05.ui.theme.fadeScaleTransform
+import com.fife.sa05.ui.theme.fadeTransform
+import com.fife.sa05.ui.theme.forwardTransform
+import com.fife.sa05.ui.theme.motionEnabled
+import com.fife.sa05.ui.theme.motionTween
+import com.fife.sa05.ui.theme.pressScale
+import com.fife.sa05.ui.theme.shrinkFadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -87,6 +108,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -232,6 +254,13 @@ private enum class AppScreen {
     ADVANCED,
     HOSTS,
     EXCLUSIONS
+}
+
+/** Navigation depth, drives screen-transition direction (deeper = slide forward). */
+private fun AppScreen?.navDepth(): Int = when (this) {
+    null, AppScreen.MAIN -> 0
+    AppScreen.DIAGNOSTICS, AppScreen.SETTINGS, AppScreen.EXCLUSIONS -> 1
+    AppScreen.ADVANCED, AppScreen.HOSTS -> 2
 }
 
 @Composable
@@ -511,7 +540,21 @@ private fun XrayScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (!authorized) {
+            val navTarget = if (authorized) screen else null
+            val motionOn = motionEnabled()
+            AnimatedContent(
+                targetState = navTarget,
+                transitionSpec = {
+                    if (targetState.navDepth() >= initialState.navDepth()) {
+                        forwardTransform(motionOn)
+                    } else {
+                        backTransform(motionOn)
+                    }
+                },
+                label = "screen"
+            ) { target ->
+              Column(Modifier.fillMaxSize()) {
+                if (target == null) {
                 AuthScreen(
                     url = urlDraft,
                     updating = updating,
@@ -519,7 +562,7 @@ private fun XrayScreen(
                     onSubmit = { updateSubscription(urlDraft) },
                     modifier = Modifier.fillMaxSize()
                 )
-            } else when (screen) {
+                } else when (target) {
                 AppScreen.MAIN -> MainScreen(
                     subscription = subscription,
                     vpnState = backendState,
@@ -767,6 +810,8 @@ private fun XrayScreen(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                }
+              }
             }
         }
     }
@@ -811,14 +856,21 @@ private fun AuthScreen(
                         .fillMaxWidth()
                         .height(52.dp)
                 ) {
-                    if (updating) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text("Войти")
+                    val loginMotion = motionEnabled()
+                    AnimatedContent(
+                        targetState = updating,
+                        transitionSpec = { fadeTransform(loginMotion) },
+                        label = "loginLabel"
+                    ) { loading ->
+                        if (loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Войти")
+                        }
                     }
                 }
                 Text(
@@ -941,16 +993,22 @@ private fun RedesignedMainScreen(
     val connected = vpnState == XrayVpnService.STATE_CONNECTED
     val connecting = vpnState == XrayVpnService.STATE_CONNECTING
     val failed = vpnState.startsWith("Ошибка:")
-    val connectionContainer = when {
+    val connectionContainerTarget = when {
         failed -> MaterialTheme.colorScheme.errorContainer
         connected -> MaterialTheme.colorScheme.primaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
-    val connectionContent = when {
+    val connectionContentTarget = when {
         failed -> MaterialTheme.colorScheme.onErrorContainer
         connected -> MaterialTheme.colorScheme.onPrimaryContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val connectionContainer by animateColorAsState(
+        connectionContainerTarget, motionTween(), label = "connContainer"
+    )
+    val connectionContent by animateColorAsState(
+        connectionContentTarget, motionTween(), label = "connContent"
+    )
 
     LaunchedEffect(profileSheetVisible, profileMode, selectedSelectorIndex) {
         if (profileSheetVisible && selectedSelectorIndex >= 0) {
@@ -973,14 +1031,20 @@ private fun RedesignedMainScreen(
                     headlineContent = { Text(backend.clientTitle()) },
                     supportingContent = { Text(backend.clientDescription()) },
                     leadingContent = {
-                        Icon(
-                            imageVector = if (backend == selectedBackend) {
-                                Icons.Default.CheckCircle
-                            } else {
-                                Icons.Default.Tune
-                            },
-                            contentDescription = null
-                        )
+                        Crossfade(
+                            targetState = backend == selectedBackend,
+                            animationSpec = motionTween(),
+                            label = "modeCheck"
+                        ) { selected ->
+                            Icon(
+                                imageVector = if (selected) {
+                                    Icons.Default.CheckCircle
+                                } else {
+                                    Icons.Default.Tune
+                                },
+                                contentDescription = null
+                            )
+                        }
                     },
                     modifier = Modifier.clickable {
                         onSelectBackend(backend)
@@ -1019,7 +1083,12 @@ private fun RedesignedMainScreen(
                             zapretPreset == ZapretPreset.AUTO
                         }
                     ) {
-                        if (profileMode && updating) {
+                        Crossfade(
+                            targetState = profileMode && updating,
+                            animationSpec = motionTween(),
+                            label = "refreshSpinner"
+                        ) { loading ->
+                        if (loading) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(22.dp),
                                 strokeWidth = 2.dp
@@ -1033,6 +1102,7 @@ private fun RedesignedMainScreen(
                                     "Повторить подбор"
                                 }
                             )
+                        }
                         }
                     }
                 }
@@ -1052,6 +1122,7 @@ private fun RedesignedMainScreen(
                             val explained = explainedProfileId == profile.id
                             val chevronRotation by animateFloatAsState(
                                 targetValue = if (explained) 180f else 0f,
+                                animationSpec = motionTween(),
                                 label = "profile-chevron-${profile.id}"
                             )
                             ListItem(
@@ -1059,16 +1130,21 @@ private fun RedesignedMainScreen(
                                     Text(serverRemark.name.ifBlank { "Сервер" })
                                 },
                                 leadingContent = {
-                                    Icon(
-                                        imageVector = if (profile.id ==
-                                            subscription.activeProfile?.id
-                                        ) {
-                                            Icons.Default.CheckCircle
-                                        } else {
-                                            Icons.Default.Dns
-                                        },
-                                        contentDescription = null
-                                    )
+                                    Crossfade(
+                                        targetState = profile.id ==
+                                            subscription.activeProfile?.id,
+                                        animationSpec = motionTween(),
+                                        label = "profileCheck"
+                                    ) { active ->
+                                        Icon(
+                                            imageVector = if (active) {
+                                                Icons.Default.CheckCircle
+                                            } else {
+                                                Icons.Default.Dns
+                                            },
+                                            contentDescription = null
+                                        )
+                                    }
                                 },
                                 trailingContent = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1098,8 +1174,8 @@ private fun RedesignedMainScreen(
                             )
                             AnimatedVisibility(
                                 visible = explained,
-                                enter = expandVertically() + fadeIn(),
-                                exit = shrinkVertically() + fadeOut()
+                                enter = expandFadeIn(),
+                                exit = shrinkFadeOut()
                             ) {
                                 ProfileExplainer(
                                     profile = profile,
@@ -1120,19 +1196,26 @@ private fun RedesignedMainScreen(
                             val explained = explainedPreset == preset
                             val chevronRotation by animateFloatAsState(
                                 targetValue = if (explained) 180f else 0f,
+                                animationSpec = motionTween(),
                                 label = "chevron-${preset.name}"
                             )
                             ListItem(
                                 headlineContent = { Text(preset.title) },
                                 leadingContent = {
-                                    Icon(
-                                        imageVector = if (preset == zapretPreset) {
-                                            Icons.Default.CheckCircle
-                                        } else {
-                                            Icons.Default.Tune
-                                        },
-                                        contentDescription = null
-                                    )
+                                    Crossfade(
+                                        targetState = preset == zapretPreset,
+                                        animationSpec = motionTween(),
+                                        label = "presetCheck"
+                                    ) { selected ->
+                                        Icon(
+                                            imageVector = if (selected) {
+                                                Icons.Default.CheckCircle
+                                            } else {
+                                                Icons.Default.Tune
+                                            },
+                                            contentDescription = null
+                                        )
+                                    }
                                 },
                                 trailingContent = {
                                     IconButton(onClick = {
@@ -1159,8 +1242,8 @@ private fun RedesignedMainScreen(
                             )
                             AnimatedVisibility(
                                 visible = explained,
-                                enter = expandVertically() + fadeIn(),
-                                exit = shrinkVertically() + fadeOut()
+                                enter = expandFadeIn(),
+                                exit = shrinkFadeOut()
                             ) {
                                 StrategyExplainer(
                                     preset = preset,
@@ -1229,23 +1312,45 @@ private fun RedesignedMainScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        if (connecting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(32.dp),
-                                color = connectionContent,
-                                strokeWidth = 3.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (connected) {
-                                    Icons.Default.CheckCircle
-                                } else {
-                                    Icons.Default.PowerSettingsNew
-                                },
-                                contentDescription = null,
-                                modifier = Modifier.size(34.dp),
-                                tint = connectionContent
-                            )
+                        val statusPulse = rememberInfiniteTransition(label = "statusPulse")
+                        val pulseScale by statusPulse.animateFloat(
+                            initialValue = 1f,
+                            targetValue = if (connected && motionEnabled()) 1.08f else 1f,
+                            animationSpec = infiniteRepeatable(
+                                tween(1100, easing = Motion.Standard),
+                                RepeatMode.Reverse
+                            ),
+                            label = "pulse"
+                        )
+                        val statusMotion = motionEnabled()
+                        AnimatedContent(
+                            targetState = when {
+                                connecting -> 0
+                                connected -> 1
+                                else -> 2
+                            },
+                            transitionSpec = { fadeScaleTransform(statusMotion) },
+                            label = "statusIcon"
+                        ) { status ->
+                            when (status) {
+                                0 -> CircularProgressIndicator(
+                                    modifier = Modifier.size(32.dp),
+                                    color = connectionContent,
+                                    strokeWidth = 3.dp
+                                )
+                                1 -> Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(34.dp).scale(pulseScale),
+                                    tint = connectionContent
+                                )
+                                else -> Icon(
+                                    imageVector = Icons.Default.PowerSettingsNew,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(34.dp),
+                                    tint = connectionContent
+                                )
+                            }
                         }
                         Column(Modifier.weight(1f)) {
                             Text(
@@ -1260,12 +1365,15 @@ private fun RedesignedMainScreen(
                             )
                         }
                     }
+                    val toggleInteraction = remember { MutableInteractionSource() }
                     Button(
                         onClick = onToggleVpn,
                         enabled = !connecting,
+                        interactionSource = toggleInteraction,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp)
+                            .pressScale(toggleInteraction)
                     ) {
                         Icon(
                             Icons.Default.PowerSettingsNew,
@@ -1273,7 +1381,14 @@ private fun RedesignedMainScreen(
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text(if (connected) "Отключить VPN" else "Подключить VPN")
+                        val toggleMotion = motionEnabled()
+                        AnimatedContent(
+                            targetState = connected,
+                            transitionSpec = { fadeTransform(toggleMotion) },
+                            label = "toggleLabel"
+                        ) { c ->
+                            Text(if (c) "Отключить VPN" else "Подключить VPN")
+                        }
                     }
                 }
             }
@@ -1353,11 +1468,14 @@ private fun RedesignedMainScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (diagnosticRunning) {
+                        val diagProgress by animateFloatAsState(
+                            targetValue = results.size.toFloat() /
+                                ConnectivityDiagnostics.targets.size.toFloat(),
+                            animationSpec = motionTween(),
+                            label = "diagProgress"
+                        )
                         LinearProgressIndicator(
-                            progress = {
-                                results.size.toFloat() /
-                                    ConnectivityDiagnostics.targets.size.toFloat()
-                            },
+                            progress = { diagProgress },
                             modifier = Modifier.fillMaxWidth()
                         )
                         activeDiagnosticId?.let { id ->
@@ -1377,25 +1495,31 @@ private fun RedesignedMainScreen(
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
-                    if (diagnosticRunning) {
-                        OutlinedButton(
-                            onClick = onCancelDiagnostics,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Остановить проверку")
-                        }
-                    } else {
-                        FilledTonalButton(
-                            onClick = onRunDiagnostics,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                if (results.isEmpty()) {
-                                    "Проверить соединение"
-                                } else {
-                                    "Проверить снова"
-                                }
-                            )
+                    Crossfade(
+                        targetState = diagnosticRunning,
+                        animationSpec = motionTween(),
+                        label = "diagButton"
+                    ) { running ->
+                        if (running) {
+                            OutlinedButton(
+                                onClick = onCancelDiagnostics,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Остановить проверку")
+                            }
+                        } else {
+                            FilledTonalButton(
+                                onClick = onRunDiagnostics,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    if (results.isEmpty()) {
+                                        "Проверить соединение"
+                                    } else {
+                                        "Проверить снова"
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -1510,17 +1634,24 @@ private fun DashboardRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickableScale(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            val subtitleMotion = motionEnabled()
+            AnimatedContent(
+                targetState = subtitle,
+                transitionSpec = { fadeTransform(subtitleMotion) },
+                label = "rowSubtitle"
+            ) { s ->
+                Text(
+                    s,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         trailingFlag?.let { flag ->
             FlagBadge(flag)
@@ -1672,11 +1803,14 @@ private fun DiagnosticsScreen(
                                     ConnectivityDiagnostics.targets.size,
                                 style = MaterialTheme.typography.labelLarge
                             )
+                            val diagProgress by animateFloatAsState(
+                                targetValue = results.size.toFloat() /
+                                    ConnectivityDiagnostics.targets.size.toFloat(),
+                                animationSpec = motionTween(),
+                                label = "diagScreenProgress"
+                            )
                             LinearProgressIndicator(
-                                progress = {
-                                    results.size.toFloat() /
-                                        ConnectivityDiagnostics.targets.size.toFloat()
-                                },
+                                progress = { diagProgress },
                                 modifier = Modifier.fillMaxWidth()
                             )
                             activeDiagnosticId?.let { activeId ->
@@ -1709,19 +1843,31 @@ private fun DiagnosticsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (diagnosticRunning) {
-                        OutlinedButton(
-                            onClick = onCancelDiagnostics,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Остановить проверку")
-                        }
-                    } else {
-                        Button(
-                            onClick = onRunDiagnostics,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(if (results.isEmpty()) "Начать проверку" else "Проверить снова")
+                    Crossfade(
+                        targetState = diagnosticRunning,
+                        animationSpec = motionTween(),
+                        label = "diagScreenButton"
+                    ) { running ->
+                        if (running) {
+                            OutlinedButton(
+                                onClick = onCancelDiagnostics,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Остановить проверку")
+                            }
+                        } else {
+                            Button(
+                                onClick = onRunDiagnostics,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    if (results.isEmpty()) {
+                                        "Начать проверку"
+                                    } else {
+                                        "Проверить снова"
+                                    }
+                                )
+                            }
                         }
                     }
                     Text(
@@ -1750,7 +1896,7 @@ private fun DiagnosticsScreen(
                                     result.status == DiagnosticStatus.FAILED -> "Недоступен"
                                     else -> "Неоднозначно"
                                 }
-                                val statusColor = when {
+                                val statusColorTarget = when {
                                     result == null ->
                                         MaterialTheme.colorScheme.onSurfaceVariant
                                     result.status == DiagnosticStatus.SUCCESS ->
@@ -1759,6 +1905,11 @@ private fun DiagnosticsScreen(
                                         MaterialTheme.colorScheme.error
                                     else -> MaterialTheme.colorScheme.tertiary
                                 }
+                                val statusColor by animateColorAsState(
+                                    statusColorTarget,
+                                    motionTween(),
+                                    label = "diagStatusColor"
+                                )
                                 val detailText = if (activeDiagnosticId == target.id) {
                                     "Запрос выполняется"
                                 } else {
@@ -1767,6 +1918,7 @@ private fun DiagnosticsScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .animateContentSize()
                                         .padding(horizontal = 14.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1799,7 +1951,11 @@ private fun DiagnosticsScreen(
                                     TextButton(onClick = { onOpenTarget(target) }) {
                                         Text("Открыть")
                                     }
-                                    if (activeDiagnosticId == target.id) {
+                                    AnimatedVisibility(
+                                        visible = activeDiagnosticId == target.id,
+                                        enter = scaleIn(motionTween()) + fadeIn(motionTween()),
+                                        exit = scaleOut(motionTween()) + fadeOut(motionTween())
+                                    ) {
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(22.dp),
                                             strokeWidth = 2.dp
@@ -1879,14 +2035,21 @@ private fun ColumnScope.SettingsScreen(
                                 .fillMaxWidth()
                                 .height(52.dp)
                         ) {
-                            if (updating) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(22.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Text("Обновить подписку")
+                            val updateMotion = motionEnabled()
+                            AnimatedContent(
+                                targetState = updating,
+                                transitionSpec = { fadeTransform(updateMotion) },
+                                label = "updateLabel"
+                            ) { loading ->
+                                if (loading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(22.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text("Обновить подписку")
+                                }
                             }
                         }
                         HorizontalDivider()
@@ -2116,7 +2279,7 @@ private fun HostPingList(
             hosts.isNullOrEmpty() -> Text("Прокси-хосты в outbounds не найдены.")
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(hosts, key = { it.id }) { host ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    Card(modifier = Modifier.fillMaxWidth().animateItem()) {
                         Column(Modifier.padding(12.dp)) {
                             Text(
                                 "${host.tag} · ${host.protocol}",
@@ -2138,11 +2301,18 @@ private fun HostPingList(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(results[host.id].orEmpty())
+                                val pingMotion = motionEnabled()
                                 Button(
                                     onClick = { onPing(host) },
                                     enabled = activePing != host.id
                                 ) {
-                                    Text(if (activePing == host.id) "Пинг..." else "Пинг")
+                                    AnimatedContent(
+                                        targetState = activePing == host.id,
+                                        transitionSpec = { fadeTransform(pingMotion) },
+                                        label = "pingLabel"
+                                    ) { pinging ->
+                                        Text(if (pinging) "Пинг..." else "Пинг")
+                                    }
                                 }
                             }
                         }
@@ -2194,12 +2364,14 @@ private fun AppExclusionList(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateItem()
+                        .clickableScale { onToggle(app.packageName) }
                         .padding(vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Checkbox(
                         checked = app.packageName in selected,
-                        onCheckedChange = { onToggle(app.packageName) }
+                        onCheckedChange = null
                     )
                     Column {
                         Text(app.label)
