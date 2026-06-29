@@ -31,9 +31,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -43,11 +46,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -80,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.fife.sa05.ui.theme.Sa05Theme
 import kotlinx.coroutines.CancellationException
@@ -897,10 +897,14 @@ private fun RedesignedMainScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val runtime = remember(vpnState, selectedBackend) { VpnRuntimeState.read(context) }
-    var profileExpanded by remember { mutableStateOf(false) }
+    var profileSheetVisible by remember { mutableStateOf(false) }
     var modeSheetVisible by remember { mutableStateOf(false) }
     val modeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val profileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profileMode = selectedBackend.usesXrayProfile
+    val activeServerRemark = parseServerRemark(
+        subscription.activeProfile?.remarks.orEmpty()
+    )
     val connected = vpnState == XrayVpnService.STATE_CONNECTED
     val connecting = vpnState == XrayVpnService.STATE_CONNECTING
     val failed = vpnState.startsWith("Ошибка:")
@@ -943,6 +947,110 @@ private fun RedesignedMainScreen(
                         onSelectBackend(backend)
                         modeSheetVisible = false
                     }
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+
+    if (profileSheetVisible) {
+        ModalBottomSheet(
+            onDismissRequest = { profileSheetVisible = false },
+            sheetState = profileSheetState
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (profileMode) "Профиль" else "Стратегия",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = {
+                        if (profileMode) onRefresh() else onRetryZapretAuto()
+                    },
+                    enabled = if (profileMode) {
+                        subscription.url.isNotBlank() && !updating
+                    } else {
+                        zapretPreset == ZapretPreset.AUTO
+                    }
+                ) {
+                    if (profileMode && updating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = if (profileMode) {
+                                "Обновить подписку"
+                            } else {
+                                "Повторить подбор"
+                            }
+                        )
+                    }
+                }
+            }
+            if (profileMode) {
+                subscription.profiles.forEach { profile ->
+                    val serverRemark = parseServerRemark(profile.remarks)
+                    ListItem(
+                        headlineContent = {
+                            Text(serverRemark.name.ifBlank { "Сервер" })
+                        },
+                        leadingContent = {
+                            Icon(
+                                imageVector = if (profile.id ==
+                                    subscription.activeProfile?.id
+                                ) {
+                                    Icons.Default.CheckCircle
+                                } else {
+                                    Icons.Default.Dns
+                                },
+                                contentDescription = null
+                            )
+                        },
+                        trailingContent = {
+                            serverRemark.flag?.let { FlagBadge(it) }
+                        },
+                        modifier = Modifier.clickable {
+                            onSelect(profile.id)
+                            profileSheetVisible = false
+                        }
+                    )
+                }
+            } else {
+                ZapretPreset.selectable.forEach { preset ->
+                    ListItem(
+                        headlineContent = { Text(preset.title) },
+                        leadingContent = {
+                            Icon(
+                                imageVector = if (preset == zapretPreset) {
+                                    Icons.Default.CheckCircle
+                                } else {
+                                    Icons.Default.Tune
+                                },
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            onSelectZapretPreset(preset)
+                            profileSheetVisible = false
+                        }
+                    )
+                }
+            }
+            if (profileMode && runtime.status != VpnRunStatus.DISCONNECTED) {
+                Text(
+                    "Смена профиля автоматически переподключит VPN.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
                 )
             }
             Spacer(Modifier.height(24.dp))
@@ -1053,131 +1161,18 @@ private fun RedesignedMainScreen(
                         onClick = { modeSheetVisible = true }
                     )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    Column(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                if (profileMode) "Профиль" else "Стратегия",
-                                style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(
-                                onClick = {
-                                    if (profileMode) onRefresh() else onRetryZapretAuto()
-                                },
-                                enabled = if (profileMode) {
-                                    subscription.url.isNotBlank() && !updating
-                                } else {
-                                    zapretPreset == ZapretPreset.AUTO
-                                }
-                            ) {
-                                if (profileMode && updating) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(22.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = if (profileMode) {
-                                            "Обновить подписку"
-                                        } else {
-                                            "Повторить подбор"
-                                        }
-                                    )
-                                }
+                    DashboardRow(
+                        title = if (profileMode) "Профиль" else "Стратегия",
+                        subtitle = if (profileMode) {
+                            activeServerRemark.name.ifBlank {
+                                "Профиль не выбран"
                             }
-                        }
-                        ExposedDropdownMenuBox(
-                            expanded = profileExpanded,
-                            onExpandedChange = {
-                                val enabled = !profileMode || subscription.profiles.isNotEmpty()
-                                if (enabled) profileExpanded = !profileExpanded
-                            }
-                        ) {
-                            OutlinedTextField(
-                                value = if (profileMode) {
-                                    subscription.activeProfile?.remarks.orEmpty()
-                                } else {
-                                    zapretPreset.title
-                                },
-                                onValueChange = {},
-                                readOnly = true,
-                                enabled = !profileMode || subscription.profiles.isNotEmpty(),
-                                singleLine = true,
-                                trailingIcon = {
-                                    ExposedDropdownMenuDefaults.TrailingIcon(
-                                        expanded = profileExpanded
-                                    )
-                                },
-                                modifier = Modifier
-                                    .menuAnchor(
-                                        ExposedDropdownMenuAnchorType.PrimaryNotEditable
-                                    )
-                                    .fillMaxWidth()
-                            )
-                            ExposedDropdownMenu(
-                                expanded = profileExpanded,
-                                onDismissRequest = { profileExpanded = false }
-                            ) {
-                                if (profileMode) {
-                                    subscription.profiles.forEach { profile ->
-                                        DropdownMenuItem(
-                                            text = { Text(profile.remarks) },
-                                            trailingIcon = {
-                                                if (profile.id ==
-                                                    subscription.activeProfile?.id
-                                                ) {
-                                                    Icon(
-                                                        Icons.Default.CheckCircle,
-                                                        contentDescription = "Выбран",
-                                                        modifier = Modifier.size(20.dp)
-                                                    )
-                                                }
-                                            },
-                                            onClick = {
-                                                onSelect(profile.id)
-                                                profileExpanded = false
-                                            }
-                                        )
-                                    }
-                                } else {
-                                    ZapretPreset.selectable.forEach { preset ->
-                                        DropdownMenuItem(
-                                            text = { Text(preset.title) },
-                                            trailingIcon = {
-                                                if (preset == zapretPreset) {
-                                                    Icon(
-                                                        Icons.Default.CheckCircle,
-                                                        contentDescription = "Выбрана",
-                                                        modifier = Modifier.size(20.dp)
-                                                    )
-                                                }
-                                            },
-                                            onClick = {
-                                                onSelectZapretPreset(preset)
-                                                profileExpanded = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (profileMode &&
-                            runtime.status != VpnRunStatus.DISCONNECTED
-                        ) {
-                            Text(
-                                "Смена профиля автоматически переподключит VPN.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                        } else {
+                            zapretPreset.title
+                        },
+                        trailingFlag = activeServerRemark.flag.takeIf { profileMode },
+                        onClick = { profileSheetVisible = true }
+                    )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     DashboardRow(
                         title = "Исключения",
@@ -1370,6 +1365,7 @@ private fun RedesignedMainScreen(
 private fun DashboardRow(
     title: String,
     subtitle: String,
+    trailingFlag: String? = null,
     onClick: () -> Unit
 ) {
     Row(
@@ -1387,10 +1383,30 @@ private fun DashboardRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        trailingFlag?.let { flag ->
+            FlagBadge(flag)
+            Spacer(Modifier.width(12.dp))
+        }
         Icon(
             painterResource(R.drawable.ic_chevron_right),
             contentDescription = null
         )
+    }
+}
+
+@Composable
+private fun FlagBadge(flag: String) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(6.dp)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(flag, fontSize = 20.sp)
     }
 }
 
