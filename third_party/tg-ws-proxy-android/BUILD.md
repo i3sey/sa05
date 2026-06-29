@@ -21,16 +21,18 @@ export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android2
 
 go build \
   -buildmode=c-shared \
+  -buildvcs=false \
   -trimpath \
-  -ldflags="-s -w" \
+  -ldflags="-s -w -linkmode=external -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384" \
   -o libtgwsproxy.so \
   tg-ws-proxy.go
 ```
 
-The release APK binary bundled by SA05 has SHA-256:
+The complete pinned build, contract checks, and installation are automated by
+`scripts/build-native-arm64.sh`. The current release APK binary has SHA-256:
 
 ```text
-cf003924a6792e9bc1548b424b5caa446bcabfd564741dbc43849ec9e19bd45c
+c4e5464e2ad51d679fe17fa361783f0427bd3815d70ef5927b57d9147501974c
 ```
 
 Go build IDs may prevent a byte-identical output across toolchain patch

@@ -101,13 +101,14 @@ complete Xray configs. The selected profile is identified by `remarks`.
 ## Native runtime
 
 - APK is intentionally restricted to `arm64-v8a`.
-- `libxray.so`, `libtun2socks.so`, `geoip.dat`, and `geosite.dat` were sourced
-  from the published NetGuard v1.3.11 APK, whose project documents Xray plus
-  BadVPN tun2socks integration.
-- The current Xray binary is chosen because the requested config uses modern
-  transports including Reality, XHTTP, and Hysteria.
-- `libciadpi.so` is the unmodified static aarch64 executable from ByeDPI
-  v0.17.3, packaged with a `.so` name so Android extracts it as executable.
+- `geoip.dat` and `geosite.dat` were sourced from the published NetGuard
+  v1.3.11 APK. Native executables are now reproducibly built by
+  `scripts/build-native-arm64.sh` with Go 1.26.4 and Android NDK r29.
+- Xray is pinned to commit `d2758a023cd7f4174a5a5fa4ff66e487d4342ba0`
+  because the requested config uses modern transports including Reality,
+  XHTTP, and Hysteria.
+- `libciadpi.so` is built as a static aarch64 PIE from ByeDPI v0.17.3 and
+  packaged with a `.so` name so Android extracts it as executable.
 - Current ByeDPI presets are based on the upstream v0.17.x options and examples
   (`fake-tls-mod`, `tlsminor`, `auto-mode`, adaptive fake/OOB chains):
   https://github.com/hufrea/byedpi and
@@ -115,9 +116,11 @@ complete Xray configs. The selected profile is identified by `remarks`.
 - The expanded YouTube mobile/API/CDN domain coverage follows the maintained
   zapret-discord-youtube lists:
   https://github.com/Flowseal/zapret-discord-youtube.
-- `libtgwsproxy.so` is from Telegram WS Proxy Android v1.2.0 and is called
-  through JNA. Its corresponding GPLv3 source archive is bundled under
+- `libtgwsproxy.so` is built from Telegram WS Proxy Android v1.2.0 and is
+  called through JNA. Its corresponding GPLv3 source archive is bundled under
   `third_party/tg-ws-proxy-android/`.
+- Every bundled arm64 ELF is linked for 16 KB pages. Release CI runs
+  `scripts/check-16kb-compat.sh` to validate ZIP, `PT_LOAD`, and RELRO layout.
 - ByeDPI and zapret2 are MIT licensed. `nfqws2` is not used because its
   NFQUEUE/firewall integration requires root on normal Android devices.
 
@@ -125,6 +128,12 @@ complete Xray configs. The selected profile is identified by `remarks`.
 
 ```bash
 JAVA_HOME=/opt/android-studio/jbr ./gradlew assembleDebug
+```
+
+Rebuild native executables with:
+
+```bash
+ANDROID_SDK_ROOT="$HOME/Android/Sdk" scripts/build-native-arm64.sh
 ```
 
 Output:
