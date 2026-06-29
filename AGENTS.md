@@ -12,7 +12,7 @@ complete Xray configs. The selected profile is identified by `remarks`.
 
 1. `XrayVpnService` owns one Android VPN and three composite modes:
    Full Auto, Local Bypass, and Proxy Only.
-2. Xray must expose a loopback SOCKS inbound with UDP enabled.
+2. Xray must expose a SOCKS inbound on loopback or `0.0.0.0` with UDP enabled.
 3. Android `VpnService` creates an IPv4 TUN (`10.10.10.1/30`).
 4. `libtun2socks.so` forwards TUN traffic to that SOCKS inbound.
 5. Selected packages use `VpnService.Builder.addDisallowedApplication`, so
@@ -88,7 +88,7 @@ complete Xray configs. The selected profile is identified by `remarks`.
 - Strict JSON, not JSONC.
 - At least one inbound with:
   - `"protocol": "socks"`
-  - `"listen": "127.0.0.1"`
+  - `"listen": "127.0.0.1"`, `"localhost"`, or `"0.0.0.0"`
   - a valid numeric `"port"`
   - `"settings": { "udp": true }`
 - The saved config is never overwritten.

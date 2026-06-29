@@ -6,12 +6,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SubscriptionRepositoryTest {
-    private fun profile(remarks: String? = null, address: String = "one.example"): String {
+    private fun profile(
+        remarks: String? = null,
+        address: String = "one.example",
+        listen: String = "127.0.0.1"
+    ): String {
         val remarksField = remarks?.let { ""","remarks":"$it"""" }.orEmpty()
         return """
             {
               "inbounds":[{
-                "listen":"127.0.0.1",
+                "listen":"$listen",
                 "port":10808,
                 "protocol":"socks",
                 "settings":{"udp":true}
@@ -46,6 +50,15 @@ class SubscriptionRepositoryTest {
             SubscriptionRepository.parseProfiles(body).single().id,
             SubscriptionRepository.parseProfiles(body).single().id
         )
+    }
+
+    @Test
+    fun parsesProfileWithWildcardSocksListener() {
+        val profiles = SubscriptionRepository.parseProfiles(
+            "[${profile(remarks = "LAN", listen = "0.0.0.0")}]"
+        )
+
+        assertEquals("LAN", profiles.single().remarks)
     }
 
     @Test(expected = IllegalArgumentException::class)

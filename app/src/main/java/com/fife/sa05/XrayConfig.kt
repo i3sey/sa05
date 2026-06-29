@@ -53,8 +53,10 @@ object XrayConfig {
             val inbound = inbounds.optJSONObject(index) ?: continue
             if (inbound.optString("protocol") != "socks") continue
             val listen = inbound.optString("listen", "127.0.0.1")
-            if (listen != "127.0.0.1" && listen != "localhost") {
-                throw IllegalArgumentException("SOCKS inbound должен слушать 127.0.0.1")
+            if (listen !in setOf("127.0.0.1", "localhost", "0.0.0.0")) {
+                throw IllegalArgumentException(
+                    "SOCKS inbound должен слушать 127.0.0.1, localhost или 0.0.0.0"
+                )
             }
             val port = inbound.optInt("port", -1)
             if (port !in 1..65535) {
@@ -65,7 +67,9 @@ object XrayConfig {
             }
             return ValidatedXrayConfig(root.toString(2), port)
         }
-        throw IllegalArgumentException("Нужен SOCKS inbound на 127.0.0.1")
+        throw IllegalArgumentException(
+            "Нужен SOCKS inbound на 127.0.0.1, localhost или 0.0.0.0"
+        )
     }
 
     fun extractHosts(raw: String): List<XrayHost> {
