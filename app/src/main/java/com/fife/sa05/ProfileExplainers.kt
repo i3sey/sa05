@@ -4,14 +4,13 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,17 +22,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -145,7 +140,6 @@ private fun org.json.JSONArray.strings(): List<String> =
 
 private val LOCAL_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ProfileExplainer(
     profile: SubscriptionProfile,
@@ -164,47 +158,9 @@ internal fun ProfileExplainer(
         return
     }
 
-    var chipsVisible by remember(info) { mutableStateOf(false) }
-    LaunchedEffect(info) { chipsVisible = true }
     val primary = info.primaryOutbound
-    val chips = remember(primary) {
-        listOf(primary.protocol, primary.transport, primary.security)
-            .filter(String::isNotBlank)
-            .distinct()
-    }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            chips.forEachIndexed { index, chip ->
-                val appear by animateFloatAsState(
-                    targetValue = if (chipsVisible) 1f else 0f,
-                    animationSpec = tween(
-                        durationMillis = 320,
-                        delayMillis = index * 70,
-                        easing = FastOutSlowInEasing
-                    ),
-                    label = "profile-chip-$index"
-                )
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier.graphicsLayer {
-                        alpha = appear
-                        val scale = 0.8f + 0.2f * appear
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                ) {
-                    Text(
-                        chip,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
         if (info.balancers.isEmpty()) {
             ProfileRouteCard(primary)
         } else {
@@ -310,20 +266,25 @@ private fun ProfileRouteAnimation(outbound: ProfileOutboundInfo) {
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth()) {
-            Surface(
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                shape = RoundedCornerShape(50),
-                modifier = Modifier.weight(1f)
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    "${outbound.protocol} · ${outbound.transport} · ${securityLabel(outbound.security)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Text(
+                        "${outbound.protocol} · ${outbound.transport} · " +
+                            securityLabel(outbound.security),
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
             }
             Spacer(Modifier.weight(1f))
         }
