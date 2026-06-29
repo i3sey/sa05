@@ -50,6 +50,33 @@ internal data class ProfileBalancerInfo(
     val fallbackTag: String?
 )
 
+internal data class BalancerPacketState(
+    val branchIndex: Int,
+    val progress: Float
+)
+
+internal fun balancerPacketState(
+    progress: Float,
+    branchCount: Int,
+    offset: Float = 0f
+): BalancerPacketState {
+    require(branchCount > 0)
+    val cycleLength = branchCount.toFloat()
+    val totalProgress = progress + offset
+    if (totalProgress > 0f && totalProgress % 1f == 0f) {
+        return BalancerPacketState(
+            branchIndex = (totalProgress.toInt() - 1) % branchCount,
+            progress = 1f
+        )
+    }
+    val wrappedProgress = ((totalProgress % cycleLength) + cycleLength) % cycleLength
+    val branchIndex = wrappedProgress.toInt().coerceAtMost(branchCount - 1)
+    return BalancerPacketState(
+        branchIndex = branchIndex,
+        progress = wrappedProgress - branchIndex
+    )
+}
+
 internal data class ProfileRouteInfo(
     val primaryOutbound: ProfileOutboundInfo,
     val balancers: List<ProfileBalancerInfo>
@@ -386,17 +413,21 @@ private fun ProfileRouteAnimation(outbound: ProfileOutboundInfo) {
 
 @Composable
 private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
+    val candidates = balancer.candidates.take(3)
+    val branchCount = candidates.size.coerceAtLeast(1)
     val transition = rememberInfiniteTransition(label = "balancer-${balancer.tag}")
     val progress by transition.animateFloat(
         initialValue = 0f,
-        targetValue = 1f,
+        targetValue = branchCount.toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 3600, easing = LinearEasing),
+            animation = tween(
+                durationMillis = 3600 * branchCount,
+                easing = LinearEasing
+            ),
             repeatMode = RepeatMode.Restart
         ),
         label = "balancer-packet-${balancer.tag}"
     )
-    val candidates = balancer.candidates.take(3)
     val client = MaterialTheme.colorScheme.secondary
     val protectedWire = MaterialTheme.colorScheme.primary
     val neutralWire = MaterialTheme.colorScheme.outlineVariant
@@ -439,9 +470,12 @@ private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
                 size = Size(50.dp.toPx(), 34.dp.toPx()),
                 cornerRadius = CornerRadius(11.dp.toPx())
             )
+            val activeIndex = if (candidates.isEmpty()) {
+                -1
+            } else {
+                balancerPacketState(progress, candidates.size).branchIndex
+            }
             candidatePoints.forEachIndexed { index, candidate ->
-                val activeIndex = if (candidates.isEmpty()) -1 else
-                    (progress * candidates.size).toInt().coerceAtMost(candidates.lastIndex)
                 drawRoundRect(
                     color = when {
                         candidates.isEmpty() -> errorColor.copy(alpha = 0.25f)
@@ -455,11 +489,14 @@ private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
             }
             drawCircle(internetColor, 9.dp.toPx(), internet)
 
-            listOf(progress, (progress + 0.5f) % 1f).forEach { packetProgress ->
-                val candidateIndex = if (candidatePoints.size == 1) 0 else
-                    (packetProgress * candidatePoints.size).toInt().coerceAtMost(candidatePoints.lastIndex)
-                val candidate = candidatePoints[candidateIndex]
-                val phase = packetProgress * 3f
+            listOf(0f, 0.5f).forEach { offset ->
+                val packet = balancerPacketState(
+                    progress = progress,
+                    branchCount = candidatePoints.size,
+                    offset = offset
+                )
+                val candidate = candidatePoints[packet.branchIndex]
+                val phase = packet.progress * 3f
                 val from: Offset
                 val to: Offset
                 val localProgress: Float
