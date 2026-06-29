@@ -30,6 +30,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +43,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -75,6 +82,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -899,6 +907,8 @@ private fun RedesignedMainScreen(
     val runtime = remember(vpnState, selectedBackend) { VpnRuntimeState.read(context) }
     var profileSheetVisible by remember { mutableStateOf(false) }
     var modeSheetVisible by remember { mutableStateOf(false) }
+    var explainedProfileId by remember { mutableStateOf<String?>(null) }
+    var explainedPreset by remember { mutableStateOf<ZapretPreset?>(null) }
     val modeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profileMode = selectedBackend.usesXrayProfile
@@ -999,6 +1009,11 @@ private fun RedesignedMainScreen(
             if (profileMode) {
                 subscription.profiles.forEach { profile ->
                     val serverRemark = parseServerRemark(profile.remarks)
+                    val explained = explainedProfileId == profile.id
+                    val chevronRotation by animateFloatAsState(
+                        targetValue = if (explained) 180f else 0f,
+                        label = "profile-chevron-${profile.id}"
+                    )
                     ListItem(
                         headlineContent = {
                             Text(serverRemark.name.ifBlank { "Сервер" })
@@ -1016,16 +1031,50 @@ private fun RedesignedMainScreen(
                             )
                         },
                         trailingContent = {
-                            serverRemark.flag?.let { FlagBadge(it) }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = {
+                                    explainedProfileId = if (explained) null else profile.id
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = if (explained) {
+                                            "Скрыть параметры профиля"
+                                        } else {
+                                            "Как работает профиль"
+                                        },
+                                        modifier = Modifier.rotate(chevronRotation)
+                                    )
+                                }
+                                serverRemark.flag?.let { FlagBadge(it) }
+                            }
                         },
                         modifier = Modifier.clickable {
                             onSelect(profile.id)
                             profileSheetVisible = false
                         }
                     )
+                    AnimatedVisibility(
+                        visible = explained,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        ProfileExplainer(
+                            profile = profile,
+                            modifier = Modifier.padding(
+                                start = 24.dp,
+                                end = 24.dp,
+                                bottom = 8.dp
+                            )
+                        )
+                    }
                 }
             } else {
                 ZapretPreset.selectable.forEach { preset ->
+                    val explained = explainedPreset == preset
+                    val chevronRotation by animateFloatAsState(
+                        targetValue = if (explained) 180f else 0f,
+                        label = "chevron-${preset.name}"
+                    )
                     ListItem(
                         headlineContent = { Text(preset.title) },
                         leadingContent = {
@@ -1038,11 +1087,40 @@ private fun RedesignedMainScreen(
                                 contentDescription = null
                             )
                         },
+                        trailingContent = {
+                            IconButton(onClick = {
+                                explainedPreset = if (explained) null else preset
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (explained) {
+                                        "Скрыть как работает"
+                                    } else {
+                                        "Как работает"
+                                    },
+                                    modifier = Modifier.rotate(chevronRotation)
+                                )
+                            }
+                        },
                         modifier = Modifier.clickable {
                             onSelectZapretPreset(preset)
                             profileSheetVisible = false
                         }
                     )
+                    AnimatedVisibility(
+                        visible = explained,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        StrategyExplainer(
+                            preset = preset,
+                            modifier = Modifier.padding(
+                                start = 24.dp,
+                                end = 24.dp,
+                                bottom = 8.dp
+                            )
+                        )
+                    }
                 }
             }
             if (profileMode && runtime.status != VpnRunStatus.DISCONNECTED) {
