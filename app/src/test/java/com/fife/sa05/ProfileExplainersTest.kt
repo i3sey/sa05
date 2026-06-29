@@ -124,4 +124,36 @@ class ProfileExplainersTest {
         assertEquals("random", info.balancers.single().strategy)
         assertEquals(emptyList<ProfileOutboundInfo>(), info.balancers.single().candidates)
     }
+
+    @Test
+    fun balancerPacketFinishesCurrentBranchBeforeSelectingTheNextOne() {
+        val currentBranch = listOf(0.05f, 0.35f, 0.7f, 0.99f)
+            .map { balancerPacketState(progress = it, branchCount = 3) }
+
+        assertEquals(listOf(0, 0, 0, 0), currentBranch.map { it.branchIndex })
+        assertEquals(0.99f, currentBranch.last().progress, 0.0001f)
+
+        val branchEnd = balancerPacketState(progress = 1f, branchCount = 3)
+        assertEquals(0, branchEnd.branchIndex)
+        assertEquals(1f, branchEnd.progress, 0.0001f)
+
+        val nextBranch = balancerPacketState(progress = 1.01f, branchCount = 3)
+        assertEquals(1, nextBranch.branchIndex)
+        assertEquals(0.01f, nextBranch.progress, 0.0001f)
+
+        val offsetPacketBeforeEnd = balancerPacketState(
+            progress = 0.49f,
+            branchCount = 3,
+            offset = 0.5f
+        )
+        val offsetPacketAfterEnd = balancerPacketState(
+            progress = 0.51f,
+            branchCount = 3,
+            offset = 0.5f
+        )
+        assertEquals(0, offsetPacketBeforeEnd.branchIndex)
+        assertEquals(0.99f, offsetPacketBeforeEnd.progress, 0.0001f)
+        assertEquals(1, offsetPacketAfterEnd.branchIndex)
+        assertEquals(0.01f, offsetPacketAfterEnd.progress, 0.0001f)
+    }
 }
