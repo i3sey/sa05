@@ -111,6 +111,8 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -973,6 +975,7 @@ private fun RedesignedMainScreen(
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val runtime = remember(vpnState, selectedBackend) { VpnRuntimeState.read(context) }
     var profileSheetVisible by remember { mutableStateOf(false) }
     var modeSheetVisible by remember { mutableStateOf(false) }
@@ -1168,6 +1171,7 @@ private fun RedesignedMainScreen(
                                     containerColor = Color.Transparent
                                 ),
                                 modifier = Modifier.clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                     onSelect(profile.id)
                                     profileSheetVisible = false
                                 }
@@ -1367,7 +1371,16 @@ private fun RedesignedMainScreen(
                     }
                     val toggleInteraction = remember { MutableInteractionSource() }
                     Button(
-                        onClick = onToggleVpn,
+                        onClick = {
+                            haptic.performHapticFeedback(
+                                if (connected) {
+                                    HapticFeedbackType.ToggleOff
+                                } else {
+                                    HapticFeedbackType.ToggleOn
+                                }
+                            )
+                            onToggleVpn()
+                        },
                         enabled = !connecting,
                         interactionSource = toggleInteraction,
                         modifier = Modifier
