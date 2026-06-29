@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -30,6 +31,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
@@ -89,6 +92,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.fife.sa05.ui.theme.Sa05Theme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -268,6 +272,11 @@ private fun XrayScreen(
     val pingEngine = remember { XrayPingEngine(context.applicationContext) }
     val diagnostics = remember { ConnectivityDiagnostics() }
     val appUpdateRepository = remember { AppUpdateRepository(context.applicationContext) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val installPermissionMonitor = remember(context) {
+        InstallPermissionMonitor { AppUpdateInstaller.canInstallPackages(context) }
+    }
+    val canInstallPackages by installPermissionMonitor.canInstall.collectAsState()
     val vpnState by XrayVpnService.state.collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
     val zapretAutoProgress by XrayVpnService.zapretAutoProgress.collectAsState()
@@ -474,6 +483,12 @@ private fun XrayScreen(
     DisposableEffect(pingEngine) {
         onDispose { pingEngine.cancel() }
     }
+    DisposableEffect(lifecycleOwner, installPermissionMonitor) {
+        lifecycleOwner.lifecycle.addObserver(installPermissionMonitor)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(installPermissionMonitor)
+        }
+    }
     BackHandler(enabled = screen != AppScreen.MAIN) {
         screen = when (screen) {
             AppScreen.HOSTS, AppScreen.ADVANCED -> AppScreen.SETTINGS
@@ -643,7 +658,7 @@ private fun XrayScreen(
                     onHosts = { screen = AppScreen.HOSTS },
                     onAdvanced = { screen = AppScreen.ADVANCED },
                     updateState = updateState,
-                    canInstallPackages = AppUpdateInstaller.canInstallPackages(context),
+                    canInstallPackages = canInstallPackages,
                     onCheckUpdate = { checkAppUpdate() },
                     onDownloadUpdate = { downloadAppUpdate(it) },
                     onInstallUpdate = { installDownloadedUpdate(it) },
@@ -911,7 +926,13 @@ private fun RedesignedMainScreen(
     var explainedPreset by remember { mutableStateOf<ZapretPreset?>(null) }
     val modeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val selectorListState = rememberLazyListState()
     val profileMode = selectedBackend.usesXrayProfile
+    val selectedSelectorIndex = if (profileMode) {
+        subscription.profiles.indexOfFirst { it.id == subscription.activeProfile?.id }
+    } else {
+        ZapretPreset.selectable.indexOf(zapretPreset)
+    }
     val activeServerRemark = parseServerRemark(
         subscription.activeProfile?.remarks.orEmpty()
     )
@@ -927,6 +948,12 @@ private fun RedesignedMainScreen(
         failed -> MaterialTheme.colorScheme.onErrorContainer
         connected -> MaterialTheme.colorScheme.onPrimaryContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    LaunchedEffect(profileSheetVisible, profileMode, selectedSelectorIndex) {
+        if (profileSheetVisible && selectedSelectorIndex >= 0) {
+            selectorListState.scrollToItem(selectedSelectorIndex)
+        }
     }
 
     if (modeSheetVisible) {
@@ -968,170 +995,187 @@ private fun RedesignedMainScreen(
             onDismissRequest = { profileSheetVisible = false },
             sheetState = profileSheetState
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    if (profileMode) "Профиль" else "Стратегия",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(
-                    onClick = {
-                        if (profileMode) onRefresh() else onRetryZapretAuto()
-                    },
-                    enabled = if (profileMode) {
-                        subscription.url.isNotBlank() && !updating
-                    } else {
-                        zapretPreset == ZapretPreset.AUTO
-                    }
+            Column(modifier = Modifier.fillMaxHeight(0.92f)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (profileMode && updating) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = if (profileMode) {
-                                "Обновить подписку"
-                            } else {
-                                "Повторить подбор"
-                            }
-                        )
-                    }
-                }
-            }
-            if (profileMode) {
-                subscription.profiles.forEach { profile ->
-                    val serverRemark = parseServerRemark(profile.remarks)
-                    val explained = explainedProfileId == profile.id
-                    val chevronRotation by animateFloatAsState(
-                        targetValue = if (explained) 180f else 0f,
-                        label = "profile-chevron-${profile.id}"
+                    Text(
+                        if (profileMode) "Профиль" else "Стратегия",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f)
                     )
-                    ListItem(
-                        headlineContent = {
-                            Text(serverRemark.name.ifBlank { "Сервер" })
+                    IconButton(
+                        onClick = {
+                            if (profileMode) onRefresh() else onRetryZapretAuto()
                         },
-                        leadingContent = {
-                            Icon(
-                                imageVector = if (profile.id ==
-                                    subscription.activeProfile?.id
-                                ) {
-                                    Icons.Default.CheckCircle
-                                } else {
-                                    Icons.Default.Dns
-                                },
-                                contentDescription = null
-                            )
-                        },
-                        trailingContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = {
-                                    explainedProfileId = if (explained) null else profile.id
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Default.KeyboardArrowDown,
-                                        contentDescription = if (explained) {
-                                            "Скрыть параметры профиля"
-                                        } else {
-                                            "Как работает профиль"
-                                        },
-                                        modifier = Modifier.rotate(chevronRotation)
-                                    )
-                                }
-                                serverRemark.flag?.let { FlagBadge(it) }
-                            }
-                        },
-                        modifier = Modifier.clickable {
-                            onSelect(profile.id)
-                            profileSheetVisible = false
+                        enabled = if (profileMode) {
+                            subscription.url.isNotBlank() && !updating
+                        } else {
+                            zapretPreset == ZapretPreset.AUTO
                         }
-                    )
-                    AnimatedVisibility(
-                        visible = explained,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
                     ) {
-                        ProfileExplainer(
-                            profile = profile,
-                            modifier = Modifier.padding(
-                                start = 24.dp,
-                                end = 24.dp,
-                                bottom = 8.dp
+                        if (profileMode && updating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp
                             )
-                        )
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = if (profileMode) {
+                                    "Обновить подписку"
+                                } else {
+                                    "Повторить подбор"
+                                }
+                            )
+                        }
                     }
                 }
-            } else {
-                ZapretPreset.selectable.forEach { preset ->
-                    val explained = explainedPreset == preset
-                    val chevronRotation by animateFloatAsState(
-                        targetValue = if (explained) 180f else 0f,
-                        label = "chevron-${preset.name}"
-                    )
-                    ListItem(
-                        headlineContent = { Text(preset.title) },
-                        leadingContent = {
-                            Icon(
-                                imageVector = if (preset == zapretPreset) {
-                                    Icons.Default.CheckCircle
-                                } else {
-                                    Icons.Default.Tune
-                                },
-                                contentDescription = null
+                LazyColumn(
+                    state = selectorListState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    if (profileMode) {
+                        itemsIndexed(
+                            items = subscription.profiles,
+                            key = { index, profile -> "profile-${profile.id}-$index" }
+                        ) { _, profile ->
+                            val serverRemark = parseServerRemark(profile.remarks)
+                            val explained = explainedProfileId == profile.id
+                            val chevronRotation by animateFloatAsState(
+                                targetValue = if (explained) 180f else 0f,
+                                label = "profile-chevron-${profile.id}"
                             )
-                        },
-                        trailingContent = {
-                            IconButton(onClick = {
-                                explainedPreset = if (explained) null else preset
-                            }) {
-                                Icon(
-                                    imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = if (explained) {
-                                        "Скрыть как работает"
-                                    } else {
-                                        "Как работает"
-                                    },
-                                    modifier = Modifier.rotate(chevronRotation)
+                            ListItem(
+                                headlineContent = {
+                                    Text(serverRemark.name.ifBlank { "Сервер" })
+                                },
+                                leadingContent = {
+                                    Icon(
+                                        imageVector = if (profile.id ==
+                                            subscription.activeProfile?.id
+                                        ) {
+                                            Icons.Default.CheckCircle
+                                        } else {
+                                            Icons.Default.Dns
+                                        },
+                                        contentDescription = null
+                                    )
+                                },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(onClick = {
+                                            explainedProfileId = if (explained) null else profile.id
+                                        }) {
+                                            Icon(
+                                                imageVector = Icons.Default.KeyboardArrowDown,
+                                                contentDescription = if (explained) {
+                                                    "Скрыть параметры профиля"
+                                                } else {
+                                                    "Как работает профиль"
+                                                },
+                                                modifier = Modifier.rotate(chevronRotation)
+                                            )
+                                        }
+                                        serverRemark.flag?.let { FlagBadge(it) }
+                                    }
+                                },
+                                modifier = Modifier.clickable {
+                                    onSelect(profile.id)
+                                    profileSheetVisible = false
+                                }
+                            )
+                            AnimatedVisibility(
+                                visible = explained,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut()
+                            ) {
+                                ProfileExplainer(
+                                    profile = profile,
+                                    modifier = Modifier.padding(
+                                        start = 24.dp,
+                                        end = 24.dp,
+                                        bottom = 8.dp
+                                    )
                                 )
                             }
-                        },
-                        modifier = Modifier.clickable {
-                            onSelectZapretPreset(preset)
-                            profileSheetVisible = false
                         }
-                    )
-                    AnimatedVisibility(
-                        visible = explained,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        StrategyExplainer(
-                            preset = preset,
-                            modifier = Modifier.padding(
-                                start = 24.dp,
-                                end = 24.dp,
-                                bottom = 8.dp
+                    } else {
+                        items(
+                            items = ZapretPreset.selectable,
+                            key = { "preset-${it.name}" }
+                        ) { preset ->
+                            val explained = explainedPreset == preset
+                            val chevronRotation by animateFloatAsState(
+                                targetValue = if (explained) 180f else 0f,
+                                label = "chevron-${preset.name}"
                             )
-                        )
+                            ListItem(
+                                headlineContent = { Text(preset.title) },
+                                leadingContent = {
+                                    Icon(
+                                        imageVector = if (preset == zapretPreset) {
+                                            Icons.Default.CheckCircle
+                                        } else {
+                                            Icons.Default.Tune
+                                        },
+                                        contentDescription = null
+                                    )
+                                },
+                                trailingContent = {
+                                    IconButton(onClick = {
+                                        explainedPreset = if (explained) null else preset
+                                    }) {
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowDown,
+                                            contentDescription = if (explained) {
+                                                "Скрыть как работает"
+                                            } else {
+                                                "Как работает"
+                                            },
+                                            modifier = Modifier.rotate(chevronRotation)
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.clickable {
+                                    onSelectZapretPreset(preset)
+                                    profileSheetVisible = false
+                                }
+                            )
+                            AnimatedVisibility(
+                                visible = explained,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut()
+                            ) {
+                                StrategyExplainer(
+                                    preset = preset,
+                                    modifier = Modifier.padding(
+                                        start = 24.dp,
+                                        end = 24.dp,
+                                        bottom = 8.dp
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    if (profileMode && runtime.status != VpnRunStatus.DISCONNECTED) {
+                        item(key = "profile-reconnect-note") {
+                            Text(
+                                "Смена профиля автоматически переподключит VPN.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                            )
+                        }
                     }
                 }
             }
-            if (profileMode && runtime.status != VpnRunStatus.DISCONNECTED) {
-                Text(
-                    "Смена профиля автоматически переподключит VPN.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                )
-            }
-            Spacer(Modifier.height(24.dp))
         }
     }
 
@@ -1249,7 +1293,14 @@ private fun RedesignedMainScreen(
                             zapretPreset.title
                         },
                         trailingFlag = activeServerRemark.flag.takeIf { profileMode },
-                        onClick = { profileSheetVisible = true }
+                        onClick = {
+                            if (profileMode) {
+                                explainedProfileId = subscription.activeProfile?.id
+                            } else {
+                                explainedPreset = zapretPreset
+                            }
+                            profileSheetVisible = true
+                        }
                     )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     DashboardRow(
