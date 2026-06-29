@@ -28,8 +28,8 @@ complete Xray configs. The selected profile is identified by `remarks`.
    reflects the persisted runtime state.
 10. `sa05://add/<percent-encoded-https-url>` imports a subscription immediately.
     Invalid or failed imports never replace the last valid cached subscription.
-11. Main-screen diagnostics probes Google, Ya.ru, RuTracker, Rule34, Kinozal,
-    NNMClub, YouTube, and Telegram sequentially and publishes each result immediately.
+11. Main-screen diagnostics probes Google, Ya.ru, RuTracker, Kinozal, NNMClub,
+    YouTube, and Telegram sequentially and publishes each result immediately.
     When connected, probes validate the active backend's SOCKS inbound and also
     require the TUN and tun2socks processes to remain alive. The Open action is
     the authoritative end-to-end browser check because the client UID must stay
@@ -40,8 +40,8 @@ complete Xray configs. The selected profile is identified by `remarks`.
     through ByeDPI, blocks QUIC on UDP/443 to force browser TCP fallback, and
     sends remaining UDP (including DNS) directly. This avoids direct
     BadVPN/ByeDPI SOCKS incompatibilities and QUIC bypassing ByeDPI.
-13. Zapret auto-selection requires Google or Ya.ru plus at least two of
-    Rule34, Kinozal, and NNMClub. RuTracker is informational only because its
+13. Zapret auto-selection requires Google or Ya.ru plus both Kinozal and
+    NNMClub. RuTracker is informational only because its
     intermittent HTTP 521 is not a reliable bypass signal. Telegram is reported
     separately because its blocking may be IP-based. Auto mode refuses to
     connect if no strategy passes.
@@ -152,7 +152,7 @@ app/build/outputs/apk/debug/app-debug.apk
 - Host ping uses `burstObservatory.pingConfig.destination`, then
   `observatory.probeUrl`, then `https://www.gstatic.com/generate_204`.
 - Restriction diagnostics use validated HTTPS responses rather than ICMP.
-  Rule34, Kinozal, and NNMClub measure DPI bypass; RuTracker is informational
+  Kinozal and NNMClub measure DPI bypass; RuTracker is informational
   and Telegram indicates separate IP-level availability. YouTube is
   informational for general scoring and is the strict Full Auto selector.
   Automated requests

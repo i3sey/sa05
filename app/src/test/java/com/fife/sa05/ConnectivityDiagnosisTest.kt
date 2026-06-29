@@ -23,7 +23,7 @@ class ConnectivityDiagnosisTest {
     fun controlAndTwoDpiSitesConfirmBypass() {
         assertTrue(
             ConnectivityDiagnostics.bypassWorks(
-                results("google", "rule34", "kinozal")
+                results("google", "kinozal", "nnmclub")
             )
         )
     }
@@ -32,7 +32,7 @@ class ConnectivityDiagnosisTest {
     fun dpiSitesWithoutControlDoNotConfirmBypass() {
         assertFalse(
             ConnectivityDiagnostics.bypassWorks(
-                results("rule34", "kinozal", "nnmclub")
+                results("kinozal", "nnmclub")
             )
         )
     }
@@ -42,7 +42,7 @@ class ConnectivityDiagnosisTest {
         assertEquals(
             1,
             ConnectivityDiagnostics.bypassScore(
-                results("google", "rutracker", "rule34", "telegram")
+                results("google", "rutracker", "kinozal", "telegram")
             )
         )
     }
@@ -52,9 +52,15 @@ class ConnectivityDiagnosisTest {
         assertEquals(
             1,
             ConnectivityDiagnostics.bypassScore(
-                results("google", "youtube", "rule34")
+                results("google", "youtube", "kinozal")
             )
         )
+    }
+
+    @Test
+    fun rule34IsNotChecked() {
+        assertFalse(ConnectivityDiagnostics.targets.any { it.id == "rule34" })
+        assertFalse(ConnectivityDiagnostics.autoTargets.any { it.id == "rule34" })
     }
 
     @Test
@@ -84,7 +90,7 @@ class ConnectivityDiagnosisTest {
     @Test
     fun forbiddenResponseIsFailure() {
         val result = ConnectivityDiagnostics().classifyResponse(
-            target = ConnectivityDiagnostics.target("rule34"),
+            target = ConnectivityDiagnostics.target("kinozal"),
             statusCode = 403,
             bodyBytes = 1_000,
             delayMs = 100
