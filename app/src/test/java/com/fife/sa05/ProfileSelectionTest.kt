@@ -41,6 +41,18 @@ class ProfileSelectionTest {
     }
 
     @Test
+    fun failedVpnRetriesWithSelectedProfile() {
+        assertEquals(
+            ProfileSwitchAction.SAVE_AND_RECONNECT,
+            profileSwitchAction(
+                currentProfileId = "profile-a",
+                selectedProfileId = "profile-b",
+                runtimeStatus = VpnRunStatus.ERROR
+            )
+        )
+    }
+
+    @Test
     fun selectingCurrentProfileDoesNothing() {
         assertEquals(
             ProfileSwitchAction.NO_CHANGE,

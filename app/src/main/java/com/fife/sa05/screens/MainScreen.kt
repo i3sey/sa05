@@ -15,9 +15,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
@@ -90,13 +92,17 @@ import com.fife.sa05.ui.theme.motionTween
 import com.fife.sa05.ui.theme.pressScale
 import com.fife.sa05.ui.theme.shrinkFadeOut
 import com.fife.sa05.VpnBackend
+import com.fife.sa05.VpnComponentState
+import com.fife.sa05.VpnPrimaryAction
 import com.fife.sa05.VpnRunStatus
 import com.fife.sa05.VpnRuntimeSnapshot
-import com.fife.sa05.VpnRuntimeState
+import com.fife.sa05.VpnSecondaryAction
+import com.fife.sa05.vpnStatusPresentation
 import com.fife.sa05.XrayPreferences
-import com.fife.sa05.XrayVpnService
 import com.fife.sa05.ZapretAutoProgress
 import com.fife.sa05.ZapretPreset
+import kotlinx.coroutines.delay
+import java.util.Locale
 
 private fun VpnBackend.clientTitle(): String = when (this) {
     VpnBackend.FULL_AUTO -> "[BETA] Автоматически"
@@ -110,19 +116,55 @@ private fun VpnBackend.clientDescription(): String = when (this) {
     VpnBackend.PROXY_ONLY -> "Весь трафик через выбранный профиль"
 }
 
-private fun connectionTitle(vpnState: String): String = when {
-    vpnState == XrayVpnService.STATE_CONNECTED -> "VPN включён"
-    vpnState == XrayVpnService.STATE_CONNECTING -> "Подключение..."
-    vpnState.startsWith("Ошибка:") -> "Нужна проверка"
-    else -> "VPN выключен"
+private fun formatElapsed(startedAtMillis: Long, nowMillis: Long): String {
+    val totalSeconds = ((nowMillis - startedAtMillis).coerceAtLeast(0L) / 1_000L)
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return when {
+        hours > 0 -> String.format(Locale.ROOT, "%d:%02d:%02d", hours, minutes, seconds)
+        else -> String.format(Locale.ROOT, "%02d:%02d", minutes, seconds)
+    }
 }
 
-private fun connectionDescription(vpnState: String, runtime: VpnRuntimeSnapshot): String = when {
-    vpnState.startsWith("Ошибка:") -> vpnState
-    runtime.status != VpnRunStatus.DISCONNECTED && runtime.profileName.isNotBlank() ->
-        "${runtime.backend.clientTitle()} · ${runtime.profileName}"
-    runtime.status != VpnRunStatus.DISCONNECTED -> runtime.backend.clientTitle()
-    else -> "Выберите режим и нажмите кнопку подключения"
+private fun VpnSecondaryAction.title(): String = when (this) {
+    VpnSecondaryAction.NETWORK_SETTINGS -> "Настройки сети"
+    VpnSecondaryAction.CHANGE_PROFILE -> "Сменить профиль"
+    VpnSecondaryAction.CHANGE_STRATEGY -> "Сменить стратегию"
+    VpnSecondaryAction.DIAGNOSTICS -> "Диагностика"
+}
+
+@Composable
+private fun StatusPill(
+    text: String,
+    state: VpnComponentState? = null,
+    modifier: Modifier = Modifier
+) {
+    val container = when (state) {
+        VpnComponentState.RUNNING -> MaterialTheme.colorScheme.primaryContainer
+        VpnComponentState.FALLBACK -> MaterialTheme.colorScheme.secondaryContainer
+        VpnComponentState.FAILED -> MaterialTheme.colorScheme.errorContainer
+        VpnComponentState.STARTING -> MaterialTheme.colorScheme.tertiaryContainer
+        null -> MaterialTheme.colorScheme.surface
+    }
+    val content = when (state) {
+        VpnComponentState.RUNNING -> MaterialTheme.colorScheme.onPrimaryContainer
+        VpnComponentState.FALLBACK -> MaterialTheme.colorScheme.onSecondaryContainer
+        VpnComponentState.FAILED -> MaterialTheme.colorScheme.onErrorContainer
+        VpnComponentState.STARTING -> MaterialTheme.colorScheme.onTertiaryContainer
+        null -> MaterialTheme.colorScheme.onSurface
+    }
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = container)
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = content
+        )
+    }
 }
 
 private fun appUpdateSummary(updateState: AppUpdateState): String = when (updateState) {
@@ -133,18 +175,17 @@ private fun appUpdateSummary(updateState: AppUpdateState): String = when (update
     is AppUpdateState.Error -> "Ошибка: ${updateState.message}"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun RedesignedMainScreen(
     subscription: SubscriptionState,
-    vpnState: String,
+    vpnRuntime: VpnRuntimeSnapshot,
     updating: Boolean,
     diagnosticResults: List<DiagnosticResult>?,
     diagnosticRunning: Boolean,
     activeDiagnosticId: String?,
     diagnosticRoute: String,
     zapretAutoProgress: ZapretAutoProgress,
-    verificationMessage: String,
     selectedBackend: VpnBackend,
     zapretPreset: ZapretPreset,
     telegramCfEnabled: Boolean,
@@ -160,6 +201,8 @@ private fun RedesignedMainScreen(
     onCancelDiagnostics: () -> Unit,
     onApplyTelegram: () -> Unit,
     onDiagnostics: () -> Unit,
+    onOpenNetworkSettings: () -> Unit,
+    onOpenSubscriptionSettings: () -> Unit,
     onExclusions: () -> Unit,
     onCheckUpdate: () -> Unit,
     onSettings: () -> Unit,
@@ -167,7 +210,11 @@ private fun RedesignedMainScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val haptic = LocalHapticFeedback.current
-    val runtime = remember(vpnState, selectedBackend) { VpnRuntimeState.read(context) }
+    val runtime = vpnRuntime
+    val presentation = remember(runtime) { vpnStatusPresentation(runtime) }
+    var nowMillis by remember(runtime.connectedAtMillis) {
+        mutableStateOf(System.currentTimeMillis())
+    }
     var profileSheetVisible by remember { mutableStateOf(false) }
     var modeSheetVisible by remember { mutableStateOf(false) }
     var explainedProfileId by remember { mutableStateOf<String?>(null) }
@@ -184,9 +231,10 @@ private fun RedesignedMainScreen(
     val activeServerRemark = parseServerRemark(
         subscription.activeProfile?.remarks.orEmpty()
     )
-    val connected = vpnState == XrayVpnService.STATE_CONNECTED
-    val connecting = vpnState == XrayVpnService.STATE_CONNECTING
-    val failed = vpnState.startsWith("Ошибка:")
+    val connected = runtime.status == VpnRunStatus.CONNECTED
+    val connecting = runtime.status == VpnRunStatus.CONNECTING ||
+        runtime.status == VpnRunStatus.RECOVERING
+    val failed = runtime.status == VpnRunStatus.ERROR
     val connectionContainerTarget = when {
         failed -> MaterialTheme.colorScheme.errorContainer
         connected -> MaterialTheme.colorScheme.primaryContainer
@@ -203,6 +251,13 @@ private fun RedesignedMainScreen(
     val connectionContent by animateColorAsState(
         connectionContentTarget, motionTween(), label = "connContent"
     )
+
+    LaunchedEffect(runtime.connectedAtMillis, runtime.status) {
+        while (runtime.connectedAtMillis > 0L && runtime.requested) {
+            nowMillis = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
 
     LaunchedEffect(profileSheetVisible, profileMode, selectedSelectorIndex) {
         if (profileSheetVisible && selectedSelectorIndex >= 0) {
@@ -549,30 +604,50 @@ private fun RedesignedMainScreen(
                         }
                         Column(Modifier.weight(1f)) {
                             Text(
-                                connectionTitle(vpnState),
+                                presentation.title,
                                 style = MaterialTheme.typography.headlineSmall,
                                 color = connectionContent
                             )
                             Text(
-                                connectionDescription(vpnState, runtime),
+                                presentation.description,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = connectionContent
                             )
+                        }
+                    }
+                    if (runtime.status != VpnRunStatus.DISCONNECTED) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            StatusPill(runtime.networkType.title)
+                            if (runtime.connectedAtMillis > 0L) {
+                                StatusPill(formatElapsed(runtime.connectedAtMillis, nowMillis))
+                            }
+                            runtime.components.forEach { component ->
+                                StatusPill(
+                                    text = component.component.title,
+                                    state = component.state
+                                )
+                            }
                         }
                     }
                     val toggleInteraction = remember { MutableInteractionSource() }
                     Button(
                         onClick = {
                             haptic.performHapticFeedback(
-                                if (connected) {
+                                if (presentation.primaryAction == VpnPrimaryAction.STOP) {
                                     HapticFeedbackType.ToggleOff
                                 } else {
                                     HapticFeedbackType.ToggleOn
                                 }
                             )
-                            onToggleVpn()
+                            if (presentation.primaryAction == VpnPrimaryAction.OPEN_SUBSCRIPTION) {
+                                onOpenSubscriptionSettings()
+                            } else {
+                                onToggleVpn()
+                            }
                         },
-                        enabled = !connecting,
                         interactionSource = toggleInteraction,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -587,11 +662,41 @@ private fun RedesignedMainScreen(
                         Spacer(Modifier.width(8.dp))
                         val toggleMotion = motionEnabled()
                         AnimatedContent(
-                            targetState = connected,
+                            targetState = presentation.primaryAction,
                             transitionSpec = { fadeTransform(toggleMotion) },
                             label = "toggleLabel"
-                        ) { c ->
-                            Text(if (c) "Отключить VPN" else "Подключить VPN")
+                        ) { action ->
+                            Text(
+                                when (action) {
+                                    VpnPrimaryAction.CONNECT -> "Подключить VPN"
+                                    VpnPrimaryAction.STOP -> "Отключить VPN"
+                                    VpnPrimaryAction.RETRY -> "Повторить"
+                                    VpnPrimaryAction.OPEN_SUBSCRIPTION -> "Настроить подписку"
+                                }
+                            )
+                        }
+                    }
+                    if (presentation.secondaryActions.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            presentation.secondaryActions.forEach { action ->
+                                OutlinedButton(
+                                    onClick = {
+                                        when (action) {
+                                            VpnSecondaryAction.NETWORK_SETTINGS ->
+                                                onOpenNetworkSettings()
+                                            VpnSecondaryAction.CHANGE_PROFILE,
+                                            VpnSecondaryAction.CHANGE_STRATEGY ->
+                                                run { profileSheetVisible = true }
+                                            VpnSecondaryAction.DIAGNOSTICS -> onDiagnostics()
+                                        }
+                                    }
+                                ) {
+                                    Text(action.title())
+                                }
+                            }
                         }
                     }
                 }
@@ -775,22 +880,6 @@ private fun RedesignedMainScreen(
             }
         }
 
-        if (verificationMessage.isNotBlank()) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        verificationMessage,
-                        modifier = Modifier.padding(16.dp),
-                        color = if (verificationMessage.contains("не подтверждён")) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                }
-            }
-        }
-
         if (selectedBackend.usesTelegram &&
             connected &&
             !XrayPreferences.telegramProxyApplied(context)
@@ -832,14 +921,13 @@ private fun RedesignedMainScreen(
 @Composable
 internal fun ColumnScope.MainScreen(
     subscription: SubscriptionState,
-    vpnState: String,
+    vpnRuntime: VpnRuntimeSnapshot,
     updating: Boolean,
     diagnosticResults: List<DiagnosticResult>?,
     diagnosticRunning: Boolean,
     activeDiagnosticId: String?,
     diagnosticRoute: String,
     zapretAutoProgress: ZapretAutoProgress,
-    verificationMessage: String,
     selectedBackend: VpnBackend,
     zapretPreset: ZapretPreset,
     telegramCfEnabled: Boolean,
@@ -855,20 +943,21 @@ internal fun ColumnScope.MainScreen(
     onCancelDiagnostics: () -> Unit,
     onApplyTelegram: () -> Unit,
     onDiagnostics: () -> Unit,
+    onOpenNetworkSettings: () -> Unit,
+    onOpenSubscriptionSettings: () -> Unit,
     onExclusions: () -> Unit,
     onCheckUpdate: () -> Unit,
     onSettings: () -> Unit
 ) {
     RedesignedMainScreen(
         subscription = subscription,
-        vpnState = vpnState,
+        vpnRuntime = vpnRuntime,
         updating = updating,
         diagnosticResults = diagnosticResults,
         diagnosticRunning = diagnosticRunning,
         activeDiagnosticId = activeDiagnosticId,
         diagnosticRoute = diagnosticRoute,
         zapretAutoProgress = zapretAutoProgress,
-        verificationMessage = verificationMessage,
         selectedBackend = selectedBackend,
         zapretPreset = zapretPreset,
         telegramCfEnabled = telegramCfEnabled,
@@ -884,6 +973,8 @@ internal fun ColumnScope.MainScreen(
         onCancelDiagnostics = onCancelDiagnostics,
         onApplyTelegram = onApplyTelegram,
         onDiagnostics = onDiagnostics,
+        onOpenNetworkSettings = onOpenNetworkSettings,
+        onOpenSubscriptionSettings = onOpenSubscriptionSettings,
         onExclusions = onExclusions,
         onCheckUpdate = onCheckUpdate,
         onSettings = onSettings,

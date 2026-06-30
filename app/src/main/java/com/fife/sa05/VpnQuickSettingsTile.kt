@@ -20,7 +20,13 @@ class VpnQuickSettingsTile : TileService() {
     override fun onClick() {
         super.onClick()
         val runtime = VpnRuntimeState.read(this)
-        if (runtime.status != VpnRunStatus.DISCONNECTED) {
+        if (runtime.status in setOf(
+                VpnRunStatus.CONNECTING,
+                VpnRunStatus.CONNECTED,
+                VpnRunStatus.RECOVERING,
+                VpnRunStatus.WAITING_FOR_NETWORK
+            )
+        ) {
             BackendController.stopRunning(this)
             VpnRuntimeState.clear(this)
             renderTile(VpnRuntimeState.read(this))
@@ -68,6 +74,9 @@ class VpnQuickSettingsTile : TileService() {
         tile.state = when (runtime.status) {
             VpnRunStatus.CONNECTED -> Tile.STATE_ACTIVE
             VpnRunStatus.CONNECTING -> Tile.STATE_ACTIVE
+            VpnRunStatus.RECOVERING -> Tile.STATE_ACTIVE
+            VpnRunStatus.WAITING_FOR_NETWORK -> Tile.STATE_ACTIVE
+            VpnRunStatus.ERROR -> Tile.STATE_INACTIVE
             VpnRunStatus.DISCONNECTED -> Tile.STATE_INACTIVE
         }
         tile.label = "SA05"
@@ -75,6 +84,9 @@ class VpnQuickSettingsTile : TileService() {
             tile.subtitle = when (runtime.status) {
                 VpnRunStatus.CONNECTED -> runtime.profileName.ifBlank { "Подключено" }
                 VpnRunStatus.CONNECTING -> runtime.profileName.ifBlank { "Подключение" }
+                VpnRunStatus.RECOVERING -> "Восстановление"
+                VpnRunStatus.WAITING_FOR_NETWORK -> "Ожидание сети"
+                VpnRunStatus.ERROR -> "Нужна проверка"
                 VpnRunStatus.DISCONNECTED -> if (SubscriptionAuth.isAuthorized(this)) {
                     selected.ifBlank { "Отключено" }
                 } else {
@@ -85,6 +97,9 @@ class VpnQuickSettingsTile : TileService() {
         tile.contentDescription = when (runtime.status) {
             VpnRunStatus.CONNECTED -> "SA05 подключён: ${runtime.profileName}"
             VpnRunStatus.CONNECTING -> "SA05 подключается: ${runtime.profileName}"
+            VpnRunStatus.RECOVERING -> "SA05 восстанавливает VPN"
+            VpnRunStatus.WAITING_FOR_NETWORK -> "SA05 ожидает сеть"
+            VpnRunStatus.ERROR -> "SA05: ${runtime.message.ifBlank { "ошибка VPN" }}"
             VpnRunStatus.DISCONNECTED -> "SA05 отключён"
         }
         tile.updateTile()
