@@ -274,11 +274,12 @@ private fun XrayScreen(
         message = if (imported) "Импорт подписки..." else "Обновление подписки..."
         scope.launch {
             try {
-                val result = withContext(Dispatchers.IO) { repository.update(url) }
+                val result = SubscriptionRefreshRunner.refresh(context, url)
                 subscription = when (result) {
                     is SubscriptionUpdateResult.Updated -> result.state
                     is SubscriptionUpdateResult.NotModified -> result.state
                 }
+                SubscriptionRefreshScheduler.sync(context, subscription)
                 urlDraft = subscription.url
                 pingResults = emptyMap()
                 screen = AppScreen.MAIN
