@@ -294,28 +294,25 @@ private fun ProfileRouteAnimation(outbound: ProfileOutboundInfo) {
     val server = MaterialTheme.colorScheme.tertiary
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier.weight(1f),
-                contentAlignment = Alignment.Center
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                shape = RoundedCornerShape(50)
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    shape = RoundedCornerShape(50)
-                ) {
-                    Text(
-                        "${outbound.protocol} · ${outbound.transport} · " +
-                            securityLabel(outbound.security),
-                        style = MaterialTheme.typography.labelSmall,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
+                Text(
+                    "${outbound.protocol} · ${outbound.transport} · " +
+                        securityLabel(outbound.security),
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
             }
-            Spacer(Modifier.weight(1f))
         }
         Spacer(Modifier.height(4.dp))
         Canvas(
@@ -551,7 +548,10 @@ private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
                 color = MaterialTheme.colorScheme.error
             )
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 candidates.forEach { candidate ->
                     Surface(
                         color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f),
@@ -568,11 +568,16 @@ private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
                     }
                 }
                 if (balancer.candidates.size > candidates.size) {
-                    Text(
-                        "+${balancer.candidates.size - candidates.size}",
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            "+${balancer.candidates.size - candidates.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
         }

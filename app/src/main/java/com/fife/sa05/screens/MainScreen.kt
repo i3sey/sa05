@@ -10,7 +10,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -21,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -67,9 +71,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -226,6 +232,8 @@ private fun RedesignedMainScreen(
         beelineProfileInfo(subscription.activeProfile?.json.orEmpty())
     }
     var beelineHintVisible by remember { mutableStateOf(false) }
+    var beelineWarningProfileId by remember { mutableStateOf<String?>(null) }
+    val beelineWarningSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val modeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val selectorListState = rememberLazyListState()
@@ -269,6 +277,54 @@ private fun RedesignedMainScreen(
     LaunchedEffect(profileSheetVisible, profileMode, selectedSelectorIndex) {
         if (profileSheetVisible && selectedSelectorIndex >= 0) {
             selectorListState.scrollToItem(selectedSelectorIndex)
+        }
+    }
+
+    beelineWarningProfileId?.let { pendingId ->
+        ModalBottomSheet(
+            onDismissRequest = { beelineWarningProfileId = null },
+            sheetState = beelineWarningSheetState
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.33f)
+                    .padding(horizontal = 24.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Экспериментальный метод обхода",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Beeline XHTTP — новый, ещё не изученный способ обхода. " +
+                        "Его ограничения пока не исследованы, поведение может меняться. " +
+                        "Пожалуйста, не расходуйте много трафика через этот профиль, " +
+                        "пока ограничения не будут изучены.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.weight(1f))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { beelineWarningProfileId = null }) {
+                        Text("Отмена")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = {
+                        onSelect(pendingId)
+                        beelineWarningProfileId = null
+                        profileSheetVisible = false
+                    }) {
+                        Text("Понятно, выбрать")
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+            }
         }
     }
 
@@ -376,6 +432,7 @@ private fun RedesignedMainScreen(
                         ) { _, profile ->
                             val serverRemark = parseServerRemark(profile.remarks)
                             val explained = explainedProfileId == profile.id
+                            val isActive = profile.id == subscription.activeProfile?.id
                             val chevronRotation by animateFloatAsState(
                                 targetValue = if (explained) 180f else 0f,
                                 animationSpec = motionTween(),
@@ -383,12 +440,19 @@ private fun RedesignedMainScreen(
                             )
                             ListItem(
                                 headlineContent = {
-                                    Text(serverRemark.name.ifBlank { "Сервер" })
+                                    Text(
+                                        serverRemark.name.ifBlank { "Сервер" },
+                                        fontWeight = if (isActive) FontWeight.Bold else null,
+                                        color = if (isActive) {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        } else {
+                                            Color.Unspecified
+                                        }
+                                    )
                                 },
                                 leadingContent = {
                                     Crossfade(
-                                        targetState = profile.id ==
-                                            subscription.activeProfile?.id,
+                                        targetState = isActive,
                                         animationSpec = motionTween(),
                                         label = "profileCheck"
                                     ) { active ->
@@ -421,12 +485,24 @@ private fun RedesignedMainScreen(
                                     }
                                 },
                                 colors = ListItemDefaults.colors(
-                                    containerColor = Color.Transparent
+                                    containerColor = if (isActive) {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                            .copy(alpha = 0.55f)
+                                    } else {
+                                        Color.Transparent
+                                    }
                                 ),
-                                modifier = Modifier.clickable {
+                                modifier = Modifier
+                                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable {
                                     haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                    onSelect(profile.id)
-                                    profileSheetVisible = false
+                                    if (beelineProfileInfo(profile.json) != null) {
+                                        beelineWarningProfileId = profile.id
+                                    } else {
+                                        onSelect(profile.id)
+                                        profileSheetVisible = false
+                                    }
                                 }
                             )
                             AnimatedVisibility(
@@ -889,7 +965,20 @@ private fun RedesignedMainScreen(
 
         if (updateState is AppUpdateState.Available) {
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = CardDefaults.shape
+                        ),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+                ) {
                     DashboardRow(
                         title = "Доступно обновление",
                         subtitle = appUpdateSummary(updateState),
