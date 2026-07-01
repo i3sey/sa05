@@ -1,0 +1,83 @@
+name: Build Beeline Xray core (android/arm64)
+
+# Builds the Beeline-patched Xray core as libxray.so for arm64-v8a.
+#
+# Why CI and not a local build: the patched core MUST be built with a stock Go
+# toolchain. A custom local Go (go1.26.4-X:nodwarf5) miscompiled android/arm64 —
+# TCP worked but UDP/DNS were dead in the tunnel. Stock Go here avoids that.
+#
+# Patches applied on top of upstream Xray-core v26.6.1:
+#   - ci/dialer.patch          short 12-char Base64URL XHTTP session ID
+#                              (Beeline CDN rejects the 36-char UUID with 403)
+#   - ci/anet-patched/         stubs github.com/wlynxg/anet to the standard
+#                              library. Upstream anet linknames net.zoneCache and
+#                              corrupts the net package on newer Go, breaking UDP.
+#
+# Download the artifact and drop it into
+#   app/src/main/jniLibs/arm64-v8a/libxray.so
+# Do NOT replace it with an official Xray binary (Beeline profile -> 403).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ci/**'
+      - '.github/workflows/build-xray-core.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      XRAY_TAG: v26.6.1
+      ANDROID_API: '24'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up stock Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          check-latest: false
+
+      - name: Set up Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27
+
+      - name: Fetch and patch Xray-core
+        run: |
+          set -eux
+          git clone --depth 1 --branch "$XRAY_TAG" https://github.com/XTLS/Xray-core.git xray
+          cd xray
+          git apply "$GITHUB_WORKSPACE/ci/dialer.patch"
+          cp "$GITHUB_WORKSPACE/ci/dialer_beeline_test.go" transport/internet/splithttp/
+          cp -r "$GITHUB_WORKSPACE/ci/anet-patched" ./anet-patched
+          go mod edit -replace github.com/wlynxg/anet=./anet-patched
+          go mod tidy
+
+      - name: Verify short session-ID patch
+        working-directory: xray
+        run: go test ./transport/internet/splithttp/ -run TestNewBeelineSessionID -count=1
+
+      - name: Build android/arm64 libxray.so
+        working-directory: xray
+        run: |
+          set -eux
+          NDK='${{ steps.ndk.outputs.ndk-path }}'
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC="$CC" \
+            go build -trimpath -buildmode=pie -ldflags="-s -w" -o libxray.so ./main
+          file libxray.so
+          test "$(file -b libxray.so | grep -c 'pie executable')" = 1
+          test "$(strings libxray.so | grep -c 'net.zoneCache')" = 0
+          sha256sum libxray.so | tee libxray.so.sha256
+
+      - name: Upload libxray.so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libxray-beeline-arm64-v8a
+          path: |
+            xray/libxray.so
+            xray/libxray.so.sha256
+          if-no-files-found: error

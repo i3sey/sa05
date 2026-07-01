@@ -37,7 +37,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -81,6 +83,7 @@ import com.fife.sa05.DiagnosticResult
 import com.fife.sa05.DiagnosticStatus
 import com.fife.sa05.parseServerRemark
 import com.fife.sa05.ProfileExplainer
+import com.fife.sa05.beelineProfileInfo
 import com.fife.sa05.StrategyExplainer
 import com.fife.sa05.SubscriptionState
 import com.fife.sa05.ui.theme.expandFadeIn
@@ -219,6 +222,10 @@ private fun RedesignedMainScreen(
     var modeSheetVisible by remember { mutableStateOf(false) }
     var explainedProfileId by remember { mutableStateOf<String?>(null) }
     var explainedPreset by remember { mutableStateOf<ZapretPreset?>(null) }
+    val beeline = remember(subscription.activeProfileId) {
+        beelineProfileInfo(subscription.activeProfile?.json.orEmpty())
+    }
+    var beelineHintVisible by remember { mutableStateOf(false) }
     val modeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val profileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val selectorListState = rememberLazyListState()
@@ -613,6 +620,51 @@ private fun RedesignedMainScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = connectionContent
                             )
+                        }
+                    }
+                    if (beeline != null) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Shield,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = connectionContent.copy(alpha = 0.85f)
+                                )
+                                Text(
+                                    "Beeline XHTTP · бета",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = connectionContent.copy(alpha = 0.85f),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = { beelineHintVisible = !beelineHintVisible },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Info,
+                                        contentDescription = "Что это",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = connectionContent.copy(alpha = 0.85f)
+                                    )
+                                }
+                            }
+                            AnimatedVisibility(
+                                visible = beelineHintVisible,
+                                enter = expandFadeIn(),
+                                exit = shrinkFadeOut()
+                            ) {
+                                Text(
+                                    "Экспериментальный обход Beeline. " +
+                                        "Работает только в этом клиенте.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = connectionContent.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
                     if (runtime.status != VpnRunStatus.DISCONNECTED) {

@@ -293,7 +293,9 @@ class XrayVpnService : VpnService() {
     }
 
     private suspend fun startXrayBackend(fullAuto: Boolean = false): Int {
-        val rawConfig = runningProfile?.json ?: XrayPreferences.config(this)
+        val rawConfig = XrayConfig.applyBeelinePadding(
+            runningProfile?.json ?: XrayPreferences.config(this)
+        )
         val validated = if (fullAuto) {
             XrayConfig.buildFullAutoConfig(rawConfig, ZAPRET_BRIDGE_PORT)
         } else {

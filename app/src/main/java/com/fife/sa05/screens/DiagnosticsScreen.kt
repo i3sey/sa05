@@ -33,14 +33,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.fife.sa05.components.SectionTitle
-import com.fife.sa05.BeelineProfileInfo
 import com.fife.sa05.ConnectivityDiagnosis
 import com.fife.sa05.ConnectivityDiagnostics
 import com.fife.sa05.DiagnosticGroup
 import com.fife.sa05.DiagnosticResult
 import com.fife.sa05.DiagnosticStatus
 import com.fife.sa05.DiagnosticTarget
-import com.fife.sa05.XrayCore
 import com.fife.sa05.ui.theme.motionTween
 
 private fun diagnosticGroupTitle(group: DiagnosticGroup): String = when (group) {
@@ -48,58 +46,6 @@ private fun diagnosticGroupTitle(group: DiagnosticGroup): String = when (group) 
     DiagnosticGroup.DPI -> "DPI"
     DiagnosticGroup.MEDIA -> "Медиа"
     DiagnosticGroup.IP -> "IP"
-}
-
-@Composable
-private fun BeelineDiagnosticsCard(
-    info: BeelineProfileInfo,
-    results: List<DiagnosticResult>
-) {
-    // Best-effort handshake status: a passing control probe (generate_204 -> 204)
-    // through the tunnel means the CDN accepted the short XHTTP session. True
-    // 403 detection would require reading core logs and is out of scope.
-    val control = results.firstOrNull { it.target.id == "google" }
-    val handshake = when {
-        control == null -> "не проверено (запустите проверку)"
-        control.status == DiagnosticStatus.SUCCESS -> "204 (туннель работает)"
-        else -> "не подтверждено"
-    }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text("Beeline XHTTP", style = MaterialTheme.typography.titleLarge)
-            BeelineRow("Core", XrayCore.displayVersion)
-            BeelineRow("XHTTP session", info.sessionIdFormat)
-            BeelineRow("Padding", info.paddingSummary)
-            BeelineRow("CDN", info.cdnHost)
-            BeelineRow(
-                "VLESS Encryption",
-                if (info.encryptionEnabled) "включён" else "выключен"
-            )
-            BeelineRow("Рукопожатие", handshake)
-        }
-    }
-}
-
-@Composable
-private fun BeelineRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            value.ifBlank { "—" },
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
 }
 
 private fun diagnosticResultText(result: DiagnosticResult?): String = when {
@@ -125,8 +71,7 @@ internal fun DiagnosticsScreen(
     onRunDiagnostics: () -> Unit,
     onCancelDiagnostics: () -> Unit,
     onOpenTarget: (DiagnosticTarget) -> Unit,
-    modifier: Modifier = Modifier,
-    beeline: BeelineProfileInfo? = null
+    modifier: Modifier = Modifier
 ) {
     val results = diagnosticResults.orEmpty()
     val orderedGroups = listOf(
@@ -142,9 +87,6 @@ internal fun DiagnosticsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = 28.dp)
     ) {
-        if (beeline != null) {
-            item { BeelineDiagnosticsCard(beeline, results) }
-        }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(

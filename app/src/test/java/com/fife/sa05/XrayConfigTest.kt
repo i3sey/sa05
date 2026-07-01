@@ -168,6 +168,52 @@ class XrayConfigTest {
     }
 
     @Test
+    fun applyBeelinePaddingFillsMissingParams() {
+        // Subscription profile without padding (Beeline answers 403 for this).
+        val noPad = JSONObject(beelineConfig).also { root ->
+            root.getJSONArray("outbounds")
+                .getJSONObject(0)
+                .getJSONObject("streamSettings")
+                .getJSONObject("xhttpSettings")
+                .apply {
+                    remove("xPaddingBytes"); remove("xPaddingObfsMode")
+                    remove("xPaddingPlacement"); remove("xPaddingMethod")
+                }
+        }.toString()
+
+        val xhttp = JSONObject(XrayConfig.applyBeelinePadding(noPad))
+            .getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings").getJSONObject("xhttpSettings")
+
+        assertEquals("100-500", xhttp.getString("xPaddingBytes"))
+        assertTrue(xhttp.getBoolean("xPaddingObfsMode"))
+        assertEquals("header", xhttp.getString("xPaddingPlacement"))
+        assertEquals("tokenish", xhttp.getString("xPaddingMethod"))
+    }
+
+    @Test
+    fun applyBeelinePaddingKeepsProviderValues() {
+        val custom = JSONObject(beelineConfig).also { root ->
+            root.getJSONArray("outbounds").getJSONObject(0)
+                .getJSONObject("streamSettings").getJSONObject("xhttpSettings")
+                .put("xPaddingBytes", "50-200")
+        }.toString()
+
+        val xhttp = JSONObject(XrayConfig.applyBeelinePadding(custom))
+            .getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings").getJSONObject("xhttpSettings")
+        // Provider value preserved, remaining gaps filled.
+        assertEquals("50-200", xhttp.getString("xPaddingBytes"))
+        assertEquals("tokenish", xhttp.getString("xPaddingMethod"))
+    }
+
+    @Test
+    fun applyBeelinePaddingIgnoresNonXhttpProfiles() {
+        // The Reality/Hysteria fixture has no xhttp outbound -> untouched.
+        assertEquals(config, XrayConfig.applyBeelinePadding(config))
+    }
+
+    @Test
     fun extractsEveryProxyEndpoint() {
         val hosts = XrayConfig.extractHosts(config)
 
