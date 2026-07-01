@@ -2,23 +2,26 @@ name: Build Beeline Xray core (android/arm64)
 
 # Builds the Beeline-patched Xray core as libxray.so for arm64-v8a.
 #
-# Why CI and not a local build: the patched core MUST be built with a stock Go
-# toolchain. A custom local Go (go1.26.4-X:nodwarf5) miscompiled android/arm64 —
-# TCP worked but UDP/DNS were dead in the tunnel. Stock Go here avoids that.
+# Base tag is v26.6.0 (default): the newest Xray-core that does NOT pull
+# pion/stun (added in v26.6.1 for realm STUN), which transitively pulls
+# github.com/wlynxg/anet. anet's Android build corrupts the net package and
+# kills UDP/DNS in the tunnel (TCP survives). The stock core shipped in the app
+# is a v26.6.0-era build with no anet, and it works — so we match it.
 #
-# Patches applied on top of upstream Xray-core v26.6.1:
-#   - ci/dialer.patch          short 12-char Base64URL XHTTP session ID
-#                              (Beeline CDN rejects the 36-char UUID with 403)
-#   - ci/anet-patched/         stubs github.com/wlynxg/anet to the standard
-#                              library. Upstream anet linknames net.zoneCache and
-#                              corrupts the net package on newer Go, breaking UDP.
+# The only change vs upstream is a short 12-char Base64URL XHTTP session ID
+# (Beeline CDN rejects the 36-char UUID with 403), applied by ci/patch-xray.sh.
 #
 # Download the artifact and drop it into
 #   app/src/main/jniLibs/arm64-v8a/libxray.so
-# Do NOT replace it with an official Xray binary (Beeline profile -> 403).
+# Never replace it with an official Xray binary (Beeline profile -> 403).
 
 on:
   workflow_dispatch:
+    inputs:
+      xray_tag:
+        description: Xray-core tag to build
+        default: v26.6.0
+        required: true
   push:
     paths:
       - 'ci/**'
@@ -28,7 +31,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      XRAY_TAG: v26.6.1
+      XRAY_TAG: ${{ github.event.inputs.xray_tag || 'v26.6.0' }}
       ANDROID_API: '24'
     steps:
       - uses: actions/checkout@v4
@@ -36,8 +39,7 @@ jobs:
       - name: Set up stock Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.4'
-          check-latest: false
+          go-version: 'stable'
 
       - name: Set up Android NDK
         id: ndk
@@ -49,16 +51,12 @@ jobs:
         run: |
           set -eux
           git clone --depth 1 --branch "$XRAY_TAG" https://github.com/XTLS/Xray-core.git xray
-          cd xray
-          git apply "$GITHUB_WORKSPACE/ci/dialer.patch"
-          cp "$GITHUB_WORKSPACE/ci/dialer_beeline_test.go" transport/internet/splithttp/
-          cp -r "$GITHUB_WORKSPACE/ci/anet-patched" ./anet-patched
-          go mod edit -replace github.com/wlynxg/anet=./anet-patched
-          go mod tidy
+          chmod +x ci/patch-xray.sh
+          ci/patch-xray.sh "$PWD/xray" "$PWD/ci"
 
       - name: Verify short session-ID patch
         working-directory: xray
-        run: go test ./transport/internet/splithttp/ -run TestNewBeelineSessionID -count=1
+        run: go test ./transport/internet/... -run TestNewBeelineSessionID -count=1
 
       - name: Build android/arm64 libxray.so
         working-directory: xray
@@ -70,7 +68,9 @@ jobs:
             go build -trimpath -buildmode=pie -ldflags="-s -w" -o libxray.so ./main
           file libxray.so
           test "$(file -b libxray.so | grep -c 'pie executable')" = 1
+          # must match the working stock core: no anet / net.zoneCache poison
           test "$(strings libxray.so | grep -c 'net.zoneCache')" = 0
+          test "$(strings libxray.so | grep -c 'wlynxg/anet')" = 0
           sha256sum libxray.so | tee libxray.so.sha256
 
       - name: Upload libxray.so
