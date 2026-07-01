@@ -20,7 +20,7 @@ on:
     inputs:
       xray_tag:
         description: Xray-core tag to build
-        default: v26.6.0
+        default: v26.5.9
         required: true
   push:
     paths:
@@ -31,7 +31,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      XRAY_TAG: ${{ github.event.inputs.xray_tag || 'v26.6.0' }}
+      XRAY_TAG: ${{ github.event.inputs.xray_tag || 'v26.5.9' }}
       ANDROID_API: '24'
     steps:
       - uses: actions/checkout@v4

@@ -3,7 +3,7 @@
 `.github/workflows/build-xray-core.yml` builds the Beeline-patched Xray core
 (`libxray.so`, android/arm64) from these inputs.
 
-- **Base: XTLS/Xray-core `v26.6.0`.** This is the newest tag that does NOT pull
+- **Base: XTLS/Xray-core `v26.5.9`.** Newest tag before v26.6.1 (which added
   `pion/stun` (added in v26.6.1 for realm STUN), which transitively pulls
   `github.com/wlynxg/anet`. anet's Android build corrupts the `net` package on
   recent Go and kills UDP/DNS in the tunnel (TCP keeps working — that was the
