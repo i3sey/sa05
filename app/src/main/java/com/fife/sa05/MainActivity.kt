@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -235,12 +236,11 @@ private fun XrayScreen(
         InstallPermissionMonitor { AppUpdateInstaller.canInstallPackages(context) }
     }
     val canInstallPackages by installPermissionMonitor.canInstall.collectAsState()
-    val vpnState by XrayVpnService.state.collectAsState()
+    val vpnRuntime by VpnRuntimeState.observe(context).collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
     val zapretAutoProgress by XrayVpnService.zapretAutoProgress.collectAsState()
-    val verificationMessage by XrayVpnService.verificationMessage.collectAsState()
     val importUrl by subscriptionImport.collectAsState()
-    val backendState = vpnState
+    val backendState = vpnRuntime.status
     val snackbarHostState = remember { SnackbarHostState() }
     val authorized = SubscriptionAuth.isAuthorized(subscription)
     var updateState by remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
@@ -274,11 +274,12 @@ private fun XrayScreen(
         message = if (imported) "Импорт подписки..." else "Обновление подписки..."
         scope.launch {
             try {
-                val result = withContext(Dispatchers.IO) { repository.update(url) }
+                val result = SubscriptionRefreshRunner.refresh(context, url)
                 subscription = when (result) {
                     is SubscriptionUpdateResult.Updated -> result.state
                     is SubscriptionUpdateResult.NotModified -> result.state
                 }
+                SubscriptionRefreshScheduler.sync(context, subscription)
                 urlDraft = subscription.url
                 pingResults = emptyMap()
                 screen = AppScreen.MAIN
@@ -305,7 +306,7 @@ private fun XrayScreen(
         diagnosticRunning = true
         diagnosticResults = emptyList()
         activeDiagnosticId = ConnectivityDiagnostics.targets.first().id
-        val throughVpn = backendState == XrayVpnService.STATE_CONNECTED
+        val throughVpn = backendState == VpnRunStatus.CONNECTED
         diagnosticRoute = if (throughVpn) {
             "backend; TUN активен · " + VpnRuntimeState.read(context).backend.title
         } else {
@@ -430,9 +431,9 @@ private fun XrayScreen(
             updateSubscription(it, imported = true)
         }
     }
-    LaunchedEffect(selectedBackend, vpnState) {
+    LaunchedEffect(selectedBackend, vpnRuntime.status) {
         if (selectedBackend.usesTelegram &&
-            vpnState == XrayVpnService.STATE_CONNECTED &&
+            vpnRuntime.status == VpnRunStatus.CONNECTED &&
             !XrayPreferences.telegramProxyApplied(context)
         ) {
             applyTelegramProxy()
@@ -492,14 +493,13 @@ private fun XrayScreen(
                 } else when (target) {
                 AppScreen.MAIN -> MainScreen(
                     subscription = subscription,
-                    vpnState = backendState,
+                    vpnRuntime = vpnRuntime,
                     updating = updating,
                     diagnosticResults = diagnosticResults,
                     diagnosticRunning = diagnosticRunning,
                     activeDiagnosticId = activeDiagnosticId,
                     diagnosticRoute = diagnosticRoute,
                     zapretAutoProgress = zapretAutoProgress,
-                    verificationMessage = verificationMessage,
                     selectedBackend = selectedBackend,
                     zapretPreset = zapretPreset,
                     telegramCfEnabled = telegramCfEnabled,
@@ -533,7 +533,7 @@ private fun XrayScreen(
                     onToggleVpn = {
                         val runtime = VpnRuntimeState.read(context)
                         if (runtime.status == VpnRunStatus.DISCONNECTED ||
-                            backendState.startsWith("Ошибка:")
+                            runtime.status == VpnRunStatus.ERROR
                         ) {
                             requestStart()
                         } else {
@@ -560,7 +560,7 @@ private fun XrayScreen(
                             zapretPreset = preset
                             XrayPreferences.saveZapretPreset(context, preset)
                             if (selectedBackend == VpnBackend.LOCAL_BYPASS &&
-                                backendState != XrayVpnService.STATE_DISCONNECTED
+                                backendState != VpnRunStatus.DISCONNECTED
                             ) {
                                 XrayVpnService.reconnect(context)
                             }
@@ -573,7 +573,7 @@ private fun XrayScreen(
                             XrayPreferences.clearZapretAutoCache(context)
                         }
                         message = if (selectedBackend != VpnBackend.PROXY_ONLY &&
-                            backendState != XrayVpnService.STATE_DISCONNECTED
+                            backendState != VpnRunStatus.DISCONNECTED
                         ) {
                             XrayVpnService.reconnect(context)
                             "Повторный подбор стратегии..."
@@ -585,6 +585,15 @@ private fun XrayScreen(
                     onCancelDiagnostics = { stopDiagnostics() },
                     onApplyTelegram = { applyTelegramProxy() },
                     onDiagnostics = { screen = AppScreen.DIAGNOSTICS },
+                    onOpenNetworkSettings = {
+                        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            Settings.Panel.ACTION_INTERNET_CONNECTIVITY
+                        } else {
+                            Settings.ACTION_WIRELESS_SETTINGS
+                        }
+                        context.startActivity(Intent(action))
+                    },
+                    onOpenSubscriptionSettings = { screen = AppScreen.SETTINGS },
                     onExclusions = { screen = AppScreen.EXCLUSIONS },
                     onCheckUpdate = {
                         if (updateState is AppUpdateState.Available) {
@@ -661,7 +670,7 @@ private fun XrayScreen(
                         telegramCfEnabled = it
                         XrayPreferences.saveTelegramCfEnabled(context, it)
                         if (selectedBackend.usesTelegram &&
-                            backendState == XrayVpnService.STATE_CONNECTED
+                            backendState == VpnRunStatus.CONNECTED
                         ) {
                             XrayVpnService.reconnect(context)
                         }
@@ -671,7 +680,7 @@ private fun XrayScreen(
                         XrayPreferences.saveTelegramCfDomain(context, telegramCfDomain)
                         message = "Настройки Telegram Proxy сохранены"
                         if (selectedBackend.usesTelegram &&
-                            backendState == XrayVpnService.STATE_CONNECTED
+                            backendState == VpnRunStatus.CONNECTED
                         ) {
                             XrayVpnService.reconnect(context)
                         }

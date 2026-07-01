@@ -112,6 +112,41 @@ object XrayConfig {
         return result
     }
 
+    /**
+     * Fills in Beeline XHTTP padding parameters when a VLESS+XHTTP outbound is
+     * missing them.
+     *
+     * Beeline CDN rejects XHTTP requests on two signals: the long UUID session
+     * ID (fixed by the patched core) AND the stock padding (`x_padding=XXXX…`).
+     * Without the padding params the CDN answers 403 for the whole tunnel, so
+     * every proxied request fails and the browser shows
+     * DNS_PROBE_FINISHED_NO_INTERNET even though the TCP handshake to the CDN
+     * (what latency probes measure) succeeds. These values are verified against
+     * the live edge (generate_204 -> 204). The padding must match the origin's
+     * XHTTP inbound; if the subscription already supplies them, they are kept.
+     *
+     * Idempotent, and a no-op for non-Beeline / non-XHTTP profiles.
+     */
+    fun applyBeelinePadding(raw: String): String {
+        val root = parse(raw)
+        val outbounds = root.optJSONArray("outbounds") ?: return root.toString(2)
+        var changed = false
+        for (index in 0 until outbounds.length()) {
+            val outbound = outbounds.optJSONObject(index) ?: continue
+            if (outbound.optString("protocol").lowercase() != "vless") continue
+            val stream = outbound.optJSONObject("streamSettings") ?: continue
+            if (stream.optString("network").lowercase() != "xhttp") continue
+            val xhttp = stream.optJSONObject("xhttpSettings")
+                ?: JSONObject().also { stream.put("xhttpSettings", it) }
+            // Only fill gaps — never override provider-supplied values.
+            if (!xhttp.has("xPaddingBytes")) { xhttp.put("xPaddingBytes", "100-500"); changed = true }
+            if (!xhttp.has("xPaddingObfsMode")) { xhttp.put("xPaddingObfsMode", true); changed = true }
+            if (!xhttp.has("xPaddingPlacement")) { xhttp.put("xPaddingPlacement", "header"); changed = true }
+            if (!xhttp.has("xPaddingMethod")) { xhttp.put("xPaddingMethod", "tokenish"); changed = true }
+        }
+        return if (changed) root.toString(2) else raw
+    }
+
     fun buildFullAutoConfig(raw: String, byeDpiPort: Int): ValidatedXrayConfig {
         require(byeDpiPort in 1..65535)
         val root = parse(raw)

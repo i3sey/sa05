@@ -8,8 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -36,7 +39,6 @@ import java.util.concurrent.atomic.AtomicLong
 
 class XrayVpnService : VpnService() {
     companion object {
-        const val STATE_DISCONNECTED = "Отключено"
         const val STATE_CONNECTING = "Подключение..."
         const val STATE_CONNECTED = "VPN подключён"
         const val ACTION_START = "com.fife.sa05.START"
@@ -48,14 +50,14 @@ class XrayVpnService : VpnService() {
         private const val ZAPRET_BRIDGE_PORT = 10811
         private const val ZAPRET_AUTO_ALGORITHM_VERSION = 4
         private const val YOUTUBE_AUTO_ALGORITHM_VERSION = 3
-        private val _state = MutableStateFlow(STATE_DISCONNECTED)
-        val state = _state.asStateFlow()
+        private const val NETWORK_DEBOUNCE_MS = 1_500L
+        private const val RECOVERY_RETRY_MS = 3_000L
+        private const val PROCESS_MONITOR_MS = 3_000L
         private val _socksPort = MutableStateFlow<Int?>(null)
         val socksPort = _socksPort.asStateFlow()
         private val _zapretAutoProgress = MutableStateFlow(ZapretAutoProgress())
         val zapretAutoProgress = _zapretAutoProgress.asStateFlow()
-        private val _verificationMessage = MutableStateFlow("")
-        val verificationMessage = _verificationMessage.asStateFlow()
+        @Volatile private var verificationMessage = ""
 
         fun start(context: Context) {
             val intent = Intent(context, XrayVpnService::class.java).setAction(ACTION_START)
@@ -75,6 +77,8 @@ class XrayVpnService : VpnService() {
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var startJob: Job? = null
     private var fullAutoOptimizationJob: Job? = null
+    private var networkRecoveryJob: Job? = null
+    private var processMonitorJob: Job? = null
     private var tun: ParcelFileDescriptor? = null
     private var proxyProcess: Process? = null
     private var auxiliaryProcess: Process? = null
@@ -84,6 +88,8 @@ class XrayVpnService : VpnService() {
     private var runningBackend = VpnBackend.PROXY_ONLY
     private var runningProfile: SubscriptionProfile? = null
     private var runningLabel = ""
+    private var activeNetworkKey: String? = null
+    private var explicitStop = false
     @Volatile
     private var telegramStarted = false
     private val startGeneration = AtomicLong()
@@ -100,9 +106,34 @@ class XrayVpnService : VpnService() {
         FULL_AUTO_YOUTUBE
     }
 
+    private data class ActiveNetwork(
+        val key: String,
+        val type: VpnNetworkType
+    )
+
+    private val connectivityManager: ConnectivityManager by lazy {
+        getSystemService(ConnectivityManager::class.java)
+    }
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = scheduleNetworkRecoveryCheck()
+
+        override fun onLost(network: Network) = scheduleNetworkRecoveryCheck()
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            networkCapabilities: NetworkCapabilities
+        ) = scheduleNetworkRecoveryCheck()
+
+        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) =
+            scheduleNetworkRecoveryCheck()
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        runCatching { connectivityManager.registerDefaultNetworkCallback(networkCallback) }
+            .onFailure { Log.w("XrayVpnService", "Network callback unavailable", it) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -113,28 +144,56 @@ class XrayVpnService : VpnService() {
         return Service.START_NOT_STICKY
     }
 
-    private fun beginStart() {
+    private fun beginStart(recoveryAttempt: Int? = null) {
+        explicitStop = false
+        runningBackend = XrayPreferences.vpnBackend(this)
         if (!SubscriptionAuth.isAuthorized(this)) {
-            _state.value = "Ошибка: нужна действующая подписка"
             _socksPort.value = null
-            VpnRuntimeState.clear(this)
+            publishRuntime(
+                status = VpnRunStatus.ERROR,
+                message = "Нужна действующая подписка",
+                failureKind = VpnFailureKind.AUTHORIZATION
+            )
             stopSelf()
             return
         }
-        runningBackend = XrayPreferences.vpnBackend(this)
         runningProfile = XrayPreferences.subscription(this).activeProfile
             .takeIf { runningBackend.usesXrayProfile }
         runningLabel = selectedLabel()
-        _state.value = STATE_CONNECTING
-        writeRuntime(VpnRunStatus.CONNECTING)
-        startForegroundNow(STATE_CONNECTING)
+        val network = currentNetwork()
+        if (network == null) {
+            publishRuntime(
+                status = VpnRunStatus.WAITING_FOR_NETWORK,
+                message = "VPN продолжит запуск после появления сети",
+                failureKind = VpnFailureKind.NETWORK,
+                recoveryAttempt = recoveryAttempt ?: 0
+            )
+            startForegroundNow("Ожидание сети")
+            return
+        }
+        val status = if (recoveryAttempt == null) {
+            VpnRunStatus.CONNECTING
+        } else {
+            VpnRunStatus.RECOVERING
+        }
+        publishRuntime(
+            status = status,
+            message = if (recoveryAttempt == null) {
+                "Запускаем ${runningBackend.title}"
+            } else {
+                "Переподключение после смены сети"
+            },
+            recoveryAttempt = recoveryAttempt ?: 0,
+            components = startingComponents()
+        )
+        startForegroundNow(if (status == VpnRunStatus.CONNECTING) STATE_CONNECTING else "Восстановление")
         startJob?.cancel()
         fullAutoOptimizationJob?.cancel()
         val generation = startGeneration.incrementAndGet()
-        startJob = scope.launch { startTunnel(generation) }
+        startJob = scope.launch { startTunnel(generation, recoveryAttempt) }
     }
 
-    private suspend fun startTunnel(generation: Long) {
+    private suspend fun startTunnel(generation: Long, recoveryAttempt: Int?) {
         startMutex.withLock {
             try {
                 stopProcesses()
@@ -156,9 +215,15 @@ class XrayVpnService : VpnService() {
                     startTun2socks(tun!!, backend.socksPort)
                 }
                 check(generation == startGeneration.get()) { "Запуск отменён" }
-                _state.value = STATE_CONNECTED
-                writeRuntime(VpnRunStatus.CONNECTED)
+                activeNetworkKey = currentNetwork()?.key
+                publishRuntime(
+                    status = VpnRunStatus.CONNECTED,
+                    message = "Маршрут запущен",
+                    connectedAtMillis = System.currentTimeMillis(),
+                    components = componentSnapshots()
+                )
                 startForegroundNow(STATE_CONNECTED)
+                startProcessMonitor()
                 if (runningBackend == VpnBackend.FULL_AUTO) {
                     launchFullAutoOptimization(generation, backend.socksPort)
                 } else if (runningBackend == VpnBackend.PROXY_ONLY ||
@@ -173,23 +238,64 @@ class XrayVpnService : VpnService() {
             } catch (e: Exception) {
                 if (generation != startGeneration.get()) return@withLock
                 Log.e("XrayVpnService", "Tunnel startup failed", e)
-                _state.value = "Ошибка: ${e.message ?: e.javaClass.simpleName}"
                 _socksPort.value = null
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = e.message ?: "Ошибка запуска"
                 )
                 stopProcesses()
-                runningProfile = null
-                runningLabel = ""
-                VpnRuntimeState.clearIfBackend(this, runningBackend)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                if (currentNetwork() == null) {
+                    publishRuntime(
+                        status = VpnRunStatus.WAITING_FOR_NETWORK,
+                        message = "Сеть пропала во время запуска; ждём восстановления",
+                        failureKind = VpnFailureKind.NETWORK,
+                        recoveryAttempt = recoveryAttempt ?: 0,
+                        components = componentSnapshots(failed = true)
+                    )
+                    startForegroundNow("Ожидание сети")
+                    return@withLock
+                }
+                val recoveryDecision = if (recoveryAttempt != null) {
+                    NetworkRecoveryPolicy.routeChecked(
+                        healthy = false,
+                        automaticAttempts = recoveryAttempt
+                    )
+                } else {
+                    NetworkRecoveryDecision.FAIL
+                }
+                if (recoveryDecision == NetworkRecoveryDecision.RECONNECT) {
+                    val completedAttempt = checkNotNull(recoveryAttempt)
+                    publishRuntime(
+                        status = VpnRunStatus.RECOVERING,
+                        message = "Повторная попытка восстановления",
+                        failureKind = VpnFailureKind.HEALTH_CHECK,
+                        recoveryAttempt = completedAttempt,
+                        components = componentSnapshots(failed = true)
+                    )
+                    startForegroundNow("Повторная попытка")
+                    scope.launch {
+                        delay(RECOVERY_RETRY_MS)
+                        if (generation == startGeneration.get()) {
+                            beginStart(completedAttempt + 1)
+                        }
+                    }
+                } else {
+                    publishRuntime(
+                        status = VpnRunStatus.ERROR,
+                        message = e.message ?: "Ошибка запуска",
+                        failureKind = failureKindFor(e),
+                        recoveryAttempt = recoveryAttempt ?: 0,
+                        components = componentSnapshots(failed = true)
+                    )
+                    startForegroundNow("Нужна проверка")
+                }
             }
         }
     }
 
     private suspend fun startXrayBackend(fullAuto: Boolean = false): Int {
-        val rawConfig = runningProfile?.json ?: XrayPreferences.config(this)
+        val rawConfig = XrayConfig.applyBeelinePadding(
+            runningProfile?.json ?: XrayPreferences.config(this)
+        )
         val validated = if (fullAuto) {
             XrayConfig.buildFullAutoConfig(rawConfig, ZAPRET_BRIDGE_PORT)
         } else {
@@ -230,13 +336,13 @@ class XrayVpnService : VpnService() {
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "Backend проверен, TUN запущен"
                 )
-                _verificationMessage.value =
+                verificationMessage =
                     "Backend проверен, TUN запущен; проверьте сайт кнопкой «Открыть»"
             } else {
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "Строгая проверка не прошла, используется лучший пресет"
                 )
-                _verificationMessage.value =
+                verificationMessage =
                     "Строгая проверка не прошла: лучший результат " +
                         "${resolved.score} из ${ConnectivityDiagnostics.dpiTargetIds.size}; " +
                         "используется ${resolved.preset.title}"
@@ -397,7 +503,7 @@ class XrayVpnService : VpnService() {
         _zapretAutoProgress.value = ZapretAutoProgress(
             message = "VPN запущен через Xray, подбираем локальный обход"
         )
-        _verificationMessage.value =
+        verificationMessage =
             "VPN уже работает через Xray; YouTube-обход подбирается в фоне"
         return BackendStart(socksPort)
     }
@@ -418,7 +524,7 @@ class XrayVpnService : VpnService() {
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "Локальный обход не подошёл, используем Xray"
                 )
-                _verificationMessage.value =
+                verificationMessage =
                     "YouTube оставлен через Xray: локальные стратегии не прошли проверку"
                 writeRuntime(VpnRunStatus.CONNECTED)
                 startForegroundNow(STATE_CONNECTED)
@@ -511,7 +617,7 @@ class XrayVpnService : VpnService() {
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "YouTube работает через Xray → ByeDPI"
                 )
-                _verificationMessage.value =
+                verificationMessage =
                     "YouTube проверен через локальный обход: ${preset.title}"
                 writeRuntime(VpnRunStatus.CONNECTED)
                 startForegroundNow(STATE_CONNECTED)
@@ -579,7 +685,7 @@ class XrayVpnService : VpnService() {
     }
 
     private fun verifyRunningTunnel() {
-        _verificationMessage.value = "Проверяем полный VPN-маршрут..."
+        verificationMessage = "Проверяем полный VPN-маршрут..."
         scope.launch {
             delay(250)
             val results = ConnectivityDiagnostics().runSocks(
@@ -588,12 +694,21 @@ class XrayVpnService : VpnService() {
                 targetsToTest = ConnectivityDiagnostics.autoTargets
             )
             val tunnelAlive = isProcessAlive(tun2socksProcess) && tun != null
-            _verificationMessage.value = if (
+            verificationMessage = if (
                 tunnelAlive && ConnectivityDiagnostics.bypassWorks(results)
             ) {
                 "Backend и TUN работают; проверьте сайт кнопкой «Открыть»"
             } else {
                 "VPN включён, но обход ограничений не подтверждён"
+            }
+            val runtime = VpnRuntimeState.read(this@XrayVpnService)
+            if (runtime.status == VpnRunStatus.CONNECTED) {
+                publishRuntime(
+                    status = VpnRunStatus.CONNECTED,
+                    message = verificationMessage,
+                    connectedAtMillis = runtime.connectedAtMillis,
+                    components = componentSnapshots()
+                )
             }
         }
     }
@@ -638,18 +753,279 @@ class XrayVpnService : VpnService() {
         waitForPort(bridgeProcess!!, ZAPRET_BRIDGE_PORT, 5_000)
     }
 
-    private fun networkKey(): String {
-        val manager = getSystemService(ConnectivityManager::class.java)
-        val network = manager.activeNetwork
-        val link = manager.getLinkProperties(network)
-        val capabilities = manager.getNetworkCapabilities(network)
-        return buildString {
-            append(network?.networkHandle ?: 0L)
-            append('|').append(link?.interfaceName.orEmpty())
-            append('|').append(link?.dnsServers?.joinToString(",").orEmpty())
-            append('|').append(capabilities?.toString()?.hashCode() ?: 0)
+    private fun scheduleNetworkRecoveryCheck() {
+        val runtime = VpnRuntimeState.read(this)
+        if (!runtime.requested || runtime.failureKind == VpnFailureKind.AUTHORIZATION) return
+        networkRecoveryJob?.cancel()
+        networkRecoveryJob = scope.launch {
+            delay(NETWORK_DEBOUNCE_MS)
+            handleNetworkRecoveryCheck()
         }
     }
+
+    private suspend fun handleNetworkRecoveryCheck() {
+        val runtime = VpnRuntimeState.read(this)
+        if (!runtime.requested || runtime.failureKind == VpnFailureKind.AUTHORIZATION) return
+        val network = currentNetwork()
+        if (network == null) {
+            publishRuntime(
+                status = VpnRunStatus.WAITING_FOR_NETWORK,
+                message = "VPN продолжит работу после появления сети",
+                failureKind = VpnFailureKind.NETWORK,
+                connectedAtMillis = runtime.connectedAtMillis,
+                components = componentSnapshots()
+            )
+            startForegroundNow("Ожидание сети")
+            return
+        }
+        if (runtime.status == VpnRunStatus.CONNECTING ||
+            runtime.status == VpnRunStatus.RECOVERING
+        ) {
+            return
+        }
+        if (runtime.status == VpnRunStatus.WAITING_FOR_NETWORK) {
+            beginStart(recoveryAttempt = 1)
+            return
+        }
+        if (runtime.status == VpnRunStatus.ERROR) {
+            if (runtime.networkKey.isNotBlank() && runtime.networkKey != network.key) {
+                beginStart(recoveryAttempt = 1)
+            }
+            return
+        }
+        if (_socksPort.value == null) {
+            beginStart(recoveryAttempt = 1)
+            return
+        }
+        when (NetworkRecoveryPolicy.networkChanged(activeNetworkKey, network.key)) {
+            NetworkRecoveryDecision.NONE -> {
+                if (runtime.networkType != network.type) {
+                    VpnRuntimeState.publish(
+                        this,
+                        runtime.copy(networkType = network.type, networkKey = network.key)
+                    )
+                }
+            }
+            NetworkRecoveryDecision.WAIT_FOR_NETWORK -> Unit
+            NetworkRecoveryDecision.VERIFY_ROUTE -> verifyRouteAfterNetworkChange(network)
+            NetworkRecoveryDecision.RECONNECT -> beginStart(recoveryAttempt = 1)
+            NetworkRecoveryDecision.FAIL -> publishRuntime(
+                status = VpnRunStatus.ERROR,
+                message = "VPN не удалось восстановить после смены сети",
+                failureKind = VpnFailureKind.HEALTH_CHECK,
+                components = componentSnapshots(failed = true)
+            )
+        }
+    }
+
+    private suspend fun verifyRouteAfterNetworkChange(network: ActiveNetwork) {
+        val generation = startGeneration.get()
+        val previous = VpnRuntimeState.read(this)
+        publishRuntime(
+            status = VpnRunStatus.RECOVERING,
+            message = "Проверяем маршрут через ${network.type.title}",
+            connectedAtMillis = previous.connectedAtMillis,
+            components = componentSnapshots()
+        )
+        startForegroundNow("Проверка VPN-маршрута")
+        val port = _socksPort.value
+        val healthy = port != null && requiredProcessesRunning() && runCatching {
+            val results = ConnectivityDiagnostics().runSocks(
+                port,
+                resolveForSocks = runningBackend == VpnBackend.LOCAL_BYPASS,
+                targetsToTest = ConnectivityDiagnostics.autoTargets
+            )
+            ConnectivityDiagnostics.bypassWorks(results)
+        }.getOrDefault(false)
+        if (generation != startGeneration.get()) return
+        when (NetworkRecoveryPolicy.routeChecked(healthy, automaticAttempts = 0)) {
+            NetworkRecoveryDecision.NONE -> {
+                activeNetworkKey = network.key
+                publishRuntime(
+                    status = VpnRunStatus.CONNECTED,
+                    message = "Маршрут восстановлен без переподключения",
+                    connectedAtMillis = previous.connectedAtMillis,
+                    components = componentSnapshots()
+                )
+                startForegroundNow(STATE_CONNECTED)
+                if (runningBackend == VpnBackend.FULL_AUTO && port != null) {
+                    refreshFullAutoForNetwork(generation, port)
+                }
+            }
+            NetworkRecoveryDecision.RECONNECT -> beginStart(recoveryAttempt = 1)
+            NetworkRecoveryDecision.FAIL -> {
+                publishRuntime(
+                    status = VpnRunStatus.ERROR,
+                    message = "Проверка маршрута не пройдена",
+                    failureKind = VpnFailureKind.HEALTH_CHECK,
+                    components = componentSnapshots(failed = true)
+                )
+                startForegroundNow("Нужна проверка")
+            }
+            else -> Unit
+        }
+    }
+
+    private suspend fun refreshFullAutoForNetwork(generation: Long, socksPort: Int) {
+        fullAutoOptimizationJob?.cancel()
+        runCatching {
+            ensurePlainXrayRunning(socksPort)
+            stopFullAutoOptimizationProcesses()
+            XrayPreferences.clearYoutubeAutoCache(this)
+            launchFullAutoOptimization(generation, socksPort)
+        }.onFailure {
+            Log.w("ByeDPI-YouTube", "Network-change optimization refresh failed", it)
+        }
+    }
+
+    private fun startProcessMonitor() {
+        processMonitorJob?.cancel()
+        processMonitorJob = scope.launch {
+            while (true) {
+                delay(PROCESS_MONITOR_MS)
+                val runtime = VpnRuntimeState.read(this@XrayVpnService)
+                if (runtime.status != VpnRunStatus.CONNECTED) continue
+                if (networkRecoveryJob?.isActive == true) continue
+                if (runningBackend == VpnBackend.FULL_AUTO &&
+                    fullAutoOptimizationJob?.isActive == true
+                ) {
+                    val components = componentSnapshots()
+                    if (components != runtime.components) {
+                        publishRuntime(
+                            status = VpnRunStatus.CONNECTED,
+                            message = runtime.message,
+                            connectedAtMillis = runtime.connectedAtMillis,
+                            components = components
+                        )
+                    }
+                    continue
+                }
+                if (!requiredProcessesRunning()) {
+                    publishRuntime(
+                        status = VpnRunStatus.RECOVERING,
+                        message = "Один из компонентов VPN остановился",
+                        failureKind = VpnFailureKind.BACKEND,
+                        connectedAtMillis = runtime.connectedAtMillis,
+                        components = componentSnapshots(failed = true)
+                    )
+                    startForegroundNow("Восстановление VPN")
+                    beginStart(recoveryAttempt = 1)
+                    return@launch
+                }
+                val components = componentSnapshots()
+                if (components != runtime.components) {
+                    publishRuntime(
+                        status = VpnRunStatus.CONNECTED,
+                        message = runtime.message,
+                        connectedAtMillis = runtime.connectedAtMillis,
+                        components = components
+                    )
+                }
+            }
+        }
+    }
+
+    private fun requiredProcessesRunning(): Boolean {
+        if (tun == null || !isProcessAlive(tun2socksProcess)) return false
+        return when (runningBackend) {
+            VpnBackend.PROXY_ONLY -> isProcessAlive(proxyProcess)
+            VpnBackend.LOCAL_BYPASS ->
+                isProcessAlive(proxyProcess) && isProcessAlive(bridgeProcess) && telegramStarted
+            VpnBackend.FULL_AUTO -> {
+                val base = isProcessAlive(proxyProcess) && telegramStarted
+                if (xrayRuntime == XrayRuntime.FULL_AUTO_YOUTUBE) {
+                    base && isProcessAlive(auxiliaryProcess) && isProcessAlive(bridgeProcess)
+                } else {
+                    base
+                }
+            }
+        }
+    }
+
+    private fun startingComponents(): List<VpnComponentSnapshot> =
+        relevantComponents().map { VpnComponentSnapshot(it, VpnComponentState.STARTING) }
+
+    private fun componentSnapshots(failed: Boolean = false): List<VpnComponentSnapshot> {
+        fun state(running: Boolean): VpnComponentState = when {
+            running -> VpnComponentState.RUNNING
+            failed -> VpnComponentState.FAILED
+            else -> VpnComponentState.STARTING
+        }
+        return buildList {
+            val xrayRunning = when (runningBackend) {
+                VpnBackend.LOCAL_BYPASS -> isProcessAlive(bridgeProcess)
+                else -> isProcessAlive(proxyProcess)
+            }
+            add(VpnComponentSnapshot(VpnRuntimeComponent.XRAY, state(xrayRunning)))
+            add(VpnComponentSnapshot(VpnRuntimeComponent.TUN, state(tun != null)))
+            add(
+                VpnComponentSnapshot(
+                    VpnRuntimeComponent.TUN2SOCKS,
+                    state(isProcessAlive(tun2socksProcess))
+                )
+            )
+            if (runningBackend != VpnBackend.PROXY_ONLY) {
+                val byeDpi = when (runningBackend) {
+                    VpnBackend.LOCAL_BYPASS -> state(isProcessAlive(proxyProcess))
+                    VpnBackend.FULL_AUTO -> when {
+                        isProcessAlive(auxiliaryProcess) -> VpnComponentState.RUNNING
+                        xrayRuntime == XrayRuntime.PLAIN_PROFILE -> VpnComponentState.FALLBACK
+                        failed -> VpnComponentState.FAILED
+                        else -> VpnComponentState.STARTING
+                    }
+                    else -> VpnComponentState.STARTING
+                }
+                add(VpnComponentSnapshot(VpnRuntimeComponent.BYEDPI, byeDpi))
+                add(
+                    VpnComponentSnapshot(
+                        VpnRuntimeComponent.TELEGRAM,
+                        state(telegramStarted)
+                    )
+                )
+            }
+        }
+    }
+
+    private fun relevantComponents(): List<VpnRuntimeComponent> = buildList {
+        add(VpnRuntimeComponent.XRAY)
+        add(VpnRuntimeComponent.TUN)
+        add(VpnRuntimeComponent.TUN2SOCKS)
+        if (runningBackend != VpnBackend.PROXY_ONLY) {
+            add(VpnRuntimeComponent.BYEDPI)
+            add(VpnRuntimeComponent.TELEGRAM)
+        }
+    }
+
+    private fun currentNetwork(): ActiveNetwork? {
+        val network = connectivityManager.activeNetwork ?: return null
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return null
+        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return null
+        val link = connectivityManager.getLinkProperties(network)
+        val type = when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> VpnNetworkType.WIFI
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> VpnNetworkType.MOBILE
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> VpnNetworkType.ETHERNET
+            else -> VpnNetworkType.OTHER
+        }
+        val transportKey = when (type) {
+            VpnNetworkType.WIFI -> "wifi"
+            VpnNetworkType.MOBILE -> "mobile"
+            VpnNetworkType.ETHERNET -> "ethernet"
+            VpnNetworkType.OTHER -> "other"
+            VpnNetworkType.NONE -> "none"
+        }
+        return ActiveNetwork(
+            key = buildString {
+                append(network.networkHandle)
+                append('|').append(transportKey)
+                append('|').append(link?.interfaceName.orEmpty())
+                append('|').append(link?.dnsServers?.joinToString(",").orEmpty())
+            },
+            type = type
+        )
+    }
+
+    private fun networkKey(): String = currentNetwork()?.key.orEmpty()
 
     private fun createTun(): ParcelFileDescriptor {
         val builder = Builder()
@@ -775,17 +1151,21 @@ class XrayVpnService : VpnService() {
     }
 
     private fun stopTunnel() {
+        explicitStop = true
         startGeneration.incrementAndGet()
         startJob?.cancel()
+        networkRecoveryJob?.cancel()
+        networkRecoveryJob = null
+        processMonitorJob?.cancel()
+        processMonitorJob = null
         fullAutoOptimizationJob?.cancel()
         fullAutoOptimizationJob = null
         stopProcesses()
         runningProfile = null
         runningLabel = ""
-        _state.value = STATE_DISCONNECTED
         _socksPort.value = null
         _zapretAutoProgress.value = ZapretAutoProgress()
-        _verificationMessage.value = ""
+        verificationMessage = ""
         VpnRuntimeState.clearIfBackend(this, runningBackend)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -834,13 +1214,56 @@ class XrayVpnService : VpnService() {
         runningProfile?.remarks.orEmpty().ifBlank { "Локальный профиль" }
 
     private fun writeRuntime(status: VpnRunStatus) {
-        VpnRuntimeState.write(
-            context = this,
+        val previous = VpnRuntimeState.read(this)
+        publishRuntime(
             status = status,
-            backend = runningBackend,
-            profileId = runningProfile?.id.orEmpty(),
-            profileName = runningLabel.ifBlank { selectedLabel() }
+            message = verificationMessage,
+            connectedAtMillis = when {
+                status != VpnRunStatus.CONNECTED -> previous.connectedAtMillis
+                previous.connectedAtMillis > 0L -> previous.connectedAtMillis
+                else -> System.currentTimeMillis()
+            },
+            components = componentSnapshots()
         )
+    }
+
+    private fun publishRuntime(
+        status: VpnRunStatus,
+        message: String = "",
+        failureKind: VpnFailureKind = VpnFailureKind.NONE,
+        recoveryAttempt: Int = 0,
+        connectedAtMillis: Long? = null,
+        components: List<VpnComponentSnapshot> = componentSnapshots()
+    ) {
+        val previous = VpnRuntimeState.read(this)
+        val network = currentNetwork()
+        VpnRuntimeState.publish(
+            this,
+            VpnRuntimeSnapshot(
+                status = status,
+                backend = runningBackend,
+                profileId = runningProfile?.id.orEmpty(),
+                profileName = runningLabel.ifBlank { selectedLabel() },
+                message = message,
+                failureKind = failureKind,
+                networkType = network?.type ?: VpnNetworkType.NONE,
+                networkKey = network?.key.orEmpty(),
+                connectedAtMillis = connectedAtMillis ?: previous.connectedAtMillis,
+                automaticRecoveryAttempt = recoveryAttempt,
+                components = components
+            )
+        )
+    }
+
+    private fun failureKindFor(error: Throwable): VpnFailureKind {
+        val message = error.message.orEmpty().lowercase()
+        return when {
+            currentNetwork() == null -> VpnFailureKind.NETWORK
+            "tun" in message -> VpnFailureKind.TUNNEL
+            "proxy" in message || "прокси" in message || "xray" in message ||
+                "byedpi" in message || "telegram" in message -> VpnFailureKind.BACKEND
+            else -> VpnFailureKind.SERVICE
+        }
     }
 
     override fun onRevoke() {
@@ -849,15 +1272,30 @@ class XrayVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
+        networkRecoveryJob?.cancel()
+        processMonitorJob?.cancel()
         stopProcesses()
-        scope.cancel()
         runningProfile = null
         runningLabel = ""
-        _state.value = STATE_DISCONNECTED
         _socksPort.value = null
         _zapretAutoProgress.value = ZapretAutoProgress()
-        _verificationMessage.value = ""
-        VpnRuntimeState.clearIfBackend(this, runningBackend)
+        verificationMessage = ""
+        val runtime = VpnRuntimeState.read(this)
+        if (explicitStop) {
+            VpnRuntimeState.clearIfBackend(this, runningBackend)
+        } else if (runtime.status != VpnRunStatus.ERROR) {
+            VpnRuntimeState.publish(
+                this,
+                runtime.copy(
+                    status = VpnRunStatus.ERROR,
+                    message = "VPN-сервис остановлен системой",
+                    failureKind = VpnFailureKind.SERVICE,
+                    components = componentSnapshots(failed = true)
+                )
+            )
+        }
+        scope.cancel()
         super.onDestroy()
     }
 
@@ -891,14 +1329,21 @@ class XrayVpnService : VpnService() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         }
+        val runtime = VpnRuntimeState.read(this)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_vpn_tile)
             .setContentTitle(text)
-            .setContentText(runningLabel.ifBlank { selectedLabel() })
+            .setContentText(
+                runtime.message.ifBlank { runningLabel.ifBlank { selectedLabel() } }
+            )
             .setSubText("SA05 ${runningBackend.title}")
             .setContentIntent(openApp)
             .addAction(0, "Отключить", stopIntent)
-            .addAction(0, "Переподключить", reconnectIntent)
+            .addAction(
+                0,
+                if (runtime.status == VpnRunStatus.ERROR) "Повторить" else "Переподключить",
+                reconnectIntent
+            )
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
