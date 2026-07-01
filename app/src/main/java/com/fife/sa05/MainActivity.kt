@@ -613,6 +613,9 @@ private fun XrayScreen(
                         diagnosticRunning = diagnosticRunning,
                         activeDiagnosticId = activeDiagnosticId,
                         diagnosticRoute = diagnosticRoute,
+                        beeline = remember(subscription.activeProfileId) {
+                            beelineProfileInfo(subscription.activeProfile?.json.orEmpty())
+                        },
                         onRunDiagnostics = { runDiagnostics() },
                         onCancelDiagnostics = { stopDiagnostics() },
                         onOpenTarget = { target ->

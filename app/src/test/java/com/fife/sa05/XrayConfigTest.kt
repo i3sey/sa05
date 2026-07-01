@@ -49,6 +49,124 @@ class XrayConfigTest {
         }
     """.trimIndent()
 
+    private val beelineConfig = """
+        {
+          "inbounds": [{
+            "tag": "socks",
+            "listen": "127.0.0.1",
+            "port": 20808,
+            "protocol": "socks",
+            "settings": {"udp": true, "auth": "noauth"}
+          }],
+          "outbounds": [
+            {
+              "tag": "proxy",
+              "protocol": "vless",
+              "settings": {
+                "vnext": [{
+                  "address": "48typmw3qq.a.trbcdn.net",
+                  "port": 443,
+                  "users": [{"id": "user-uuid", "encryption": "mlkem768x25519plus.native.0rtt.SECRET"}]
+                }]
+              },
+              "streamSettings": {
+                "network": "xhttp",
+                "security": "tls",
+                "xhttpSettings": {
+                  "mode": "packet-up",
+                  "host": "48typmw3qq.a.trbcdn.net",
+                  "path": "/assets/api/v1/",
+                  "xPaddingBytes": "100-500",
+                  "xPaddingObfsMode": true,
+                  "xPaddingPlacement": "header",
+                  "xPaddingMethod": "tokenish"
+                },
+                "tlsSettings": {
+                  "serverName": "48typmw3qq.a.trbcdn.net",
+                  "alpn": ["h2", "http/1.1"]
+                }
+              }
+            },
+            {"tag": "direct", "protocol": "freedom"},
+            {"tag": "block", "protocol": "blackhole"}
+          ]
+        }
+    """.trimIndent()
+
+    private fun JSONObject.xhttpOf(outboundIndex: Int) =
+        getJSONArray("outbounds")
+            .getJSONObject(outboundIndex)
+            .getJSONObject("streamSettings")
+            .getJSONObject("xhttpSettings")
+
+    @Test
+    fun validatePreservesXhttpAndPaddingAndTls() {
+        val root = JSONObject(XrayConfig.validate(beelineConfig).runtimeJson)
+        val stream = root.getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("streamSettings")
+
+        assertEquals("xhttp", stream.getString("network"))
+        assertEquals("tls", stream.getString("security"))
+        val xhttp = stream.getJSONObject("xhttpSettings")
+        assertEquals("packet-up", xhttp.getString("mode"))
+        assertEquals("/assets/api/v1/", xhttp.getString("path"))
+        assertEquals("48typmw3qq.a.trbcdn.net", xhttp.getString("host"))
+        assertEquals("100-500", xhttp.getString("xPaddingBytes"))
+        assertTrue(xhttp.getBoolean("xPaddingObfsMode"))
+        assertEquals("header", xhttp.getString("xPaddingPlacement"))
+        assertEquals("tokenish", xhttp.getString("xPaddingMethod"))
+        val tls = stream.getJSONObject("tlsSettings")
+        assertEquals("48typmw3qq.a.trbcdn.net", tls.getString("serverName"))
+        val alpn = tls.getJSONArray("alpn")
+        assertEquals(2, alpn.length())
+        assertEquals("h2", alpn.getString(0))
+        assertEquals("http/1.1", alpn.getString(1))
+    }
+
+    @Test
+    fun fullAutoKeepsBeelineOutboundIntact() {
+        val runtime = JSONObject(
+            XrayConfig.buildFullAutoConfig(beelineConfig, 10811).runtimeJson
+        )
+        val xhttp = runtime.xhttpOf(0)
+
+        assertEquals("packet-up", xhttp.getString("mode"))
+        assertEquals("100-500", xhttp.getString("xPaddingBytes"))
+        assertEquals("tokenish", xhttp.getString("xPaddingMethod"))
+        assertEquals("xhttp", runtime.getJSONArray("outbounds")
+            .getJSONObject(0).getJSONObject("streamSettings").getString("network"))
+    }
+
+    @Test
+    fun pingConfigPreservesXhttpSettings() {
+        val host = XrayConfig.extractHosts(beelineConfig).first()
+        val root = JSONObject(XrayConfig.buildPingConfig(beelineConfig, host, 32130).runtimeJson)
+        val xhttp = root.xhttpOf(0)
+
+        assertEquals("packet-up", xhttp.getString("mode"))
+        assertEquals("header", xhttp.getString("xPaddingPlacement"))
+        assertEquals("100-500", xhttp.getString("xPaddingBytes"))
+    }
+
+    @Test
+    fun validateLeavesNonXhttpOutboundShapeUnchanged() {
+        // Regression: existing profiles keep their exact outbound structure.
+        val root = JSONObject(XrayConfig.validate(config).runtimeJson)
+        val vless = root.getJSONArray("outbounds").getJSONObject(0)
+
+        assertEquals("vless", vless.getString("protocol"))
+        assertEquals(
+            "reality",
+            vless.getJSONObject("streamSettings").getString("security")
+        )
+        assertEquals(
+            2,
+            vless.getJSONObject("settings").getJSONArray("vnext").length()
+        )
+        assertFalse(vless.getJSONObject("streamSettings").has("xhttpSettings"))
+    }
+
     @Test
     fun extractsEveryProxyEndpoint() {
         val hosts = XrayConfig.extractHosts(config)
