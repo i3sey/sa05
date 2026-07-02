@@ -32,8 +32,14 @@ echo ">> Cross-compiling android/arm64 core"
   cd "$XRAY_FORK"
   # -checklinkname=0: the wlynxg/anet dep (Android network interfaces) reaches
   # net.zoneCache via //go:linkname, which Go 1.23+ rejects by default.
+  # 16 KB page alignment (Android 15+): the external linker must set
+  # max/common-page-size to 16384, else PT_LOAD stays at 4 KB and the APK fails
+  # scripts/check-16kb-compat.sh.
+  PAGE='-Wl,-z,max-page-size=16384,-z,common-page-size=16384'
   GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC="$CC" \
-    go build -trimpath -buildmode=pie -ldflags="-s -w -checklinkname=0" -o "$OUT" ./main
+    go build -trimpath -buildmode=pie \
+      -ldflags="-s -w -checklinkname=0 -linkmode=external -extldflags=$PAGE" \
+      -o "$OUT" ./main
 )
 
 echo ">> Result"

@@ -16,7 +16,7 @@ object XrayCore {
     const val VERSION = "26.6.1"
     const val VARIANT = "beeline"
     const val SESSION_ID_FORMAT = "base64url/12"
-    const val SHA256 = "af7187d9cceba9307d17e688baa87ae64ef87f53c9f69d6b39f7971a26eb6982"
+    const val SHA256 = "db1b8f8898bda9289ef3fb08dfaefa8020b219e5814e7d75bec571a3e8fe8f04"
 
     val displayVersion: String get() = "Xray $VERSION-$VARIANT"
 }

@@ -138,8 +138,14 @@ jobs:
           ( cd xray && go test ./transport/internet/... -run TestNewBeelineSessionID -count=1 )
           NDK='${{ steps.ndk.outputs.ndk-path }}'
           CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          # 16 KB page alignment (Android 15+): force the external linker to set
+          # max/common-page-size to 16384, else PT_LOAD stays at 4 KB and the
+          # APK fails scripts/check-16kb-compat.sh.
+          PAGE='-Wl,-z,max-page-size=16384,-z,common-page-size=16384'
           ( cd xray && GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC="$CC" \
-              go build -trimpath -buildmode=pie -ldflags="-s -w" -o libxray.so ./main )
+              go build -trimpath -buildmode=pie \
+                -ldflags="-s -w -linkmode=external -extldflags=$PAGE" \
+                -o libxray.so ./main )
           # Guard against the anet/net.zoneCache regression that breaks UDP/DNS.
           test "$(strings xray/libxray.so | grep -c 'net.zoneCache')" = 0
           test "$(strings xray/libxray.so | grep -c 'wlynxg/anet')" = 0
