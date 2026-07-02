@@ -33,6 +33,10 @@ jobs:
       VERSION_NAME: ${{ inputs.version_name }}
       VERSION_CODE: ${{ inputs.version_code }}
       TAG_NAME: v${{ inputs.version_name }}
+      # Base Xray tag for the Beeline-patched core. Keep in sync with
+      # .github/workflows/build-xray-core.yml (newest tag before pion/anet).
+      XRAY_TAG: v26.5.9
+      ANDROID_API: '24'
       ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
       ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
       ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
@@ -109,6 +113,40 @@ jobs:
 
       - name: Test
         run: ./gradlew testDebugUnitTest
+
+      # The APK must ship the Beeline-patched core, never a stock Xray binary
+      # (stock -> HTTP 403 on the Beeline XHTTP profile). Build it fresh here and
+      # overwrite the committed jniLibs binary before assembling the release, so
+      # a release can never accidentally bundle an unpatched or stale core.
+      - name: Set up stock Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Set up Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27
+
+      - name: Build Beeline-patched libxray.so (android/arm64)
+        run: |
+          set -eux
+          git clone --depth 1 --branch "$XRAY_TAG" https://github.com/XTLS/Xray-core.git xray
+          chmod +x ci/patch-xray.sh
+          ci/patch-xray.sh "$PWD/xray" "$PWD/ci"
+          ( cd xray && go test ./transport/internet/... -run TestNewBeelineSessionID -count=1 )
+          NDK='${{ steps.ndk.outputs.ndk-path }}'
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          ( cd xray && GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC="$CC" \
+              go build -trimpath -buildmode=pie -ldflags="-s -w" -o libxray.so ./main )
+          # Guard against the anet/net.zoneCache regression that breaks UDP/DNS.
+          test "$(strings xray/libxray.so | grep -c 'net.zoneCache')" = 0
+          test "$(strings xray/libxray.so | grep -c 'wlynxg/anet')" = 0
+          test "$(file -b xray/libxray.so | grep -c 'pie executable')" = 1
+          install -m 0644 xray/libxray.so \
+            app/src/main/jniLibs/arm64-v8a/libxray.so
+          sha256sum app/src/main/jniLibs/arm64-v8a/libxray.so
 
       - name: Build release APK
         run: ./gradlew assembleRelease
