@@ -64,10 +64,17 @@ jobs:
           set -eux
           NDK='${{ steps.ndk.outputs.ndk-path }}'
           CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          # 16 KB page alignment (Android 15+): force the external linker to set
+          # max/common-page-size to 16384, else PT_LOAD stays at 4 KB.
+          PAGE='-Wl,-z,max-page-size=16384,-z,common-page-size=16384'
           GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC="$CC" \
-            go build -trimpath -buildmode=pie -ldflags="-s -w" -o libxray.so ./main
+            go build -trimpath -buildmode=pie \
+              -ldflags="-s -w -linkmode=external -extldflags=$PAGE" \
+              -o libxray.so ./main
           file libxray.so
           test "$(file -b libxray.so | grep -c 'pie executable')" = 1
+          # PT_LOAD segments must be 16 KB aligned (Android 15+).
+          python3 "$GITHUB_WORKSPACE/scripts/check-elf-16kb.py" libxray.so
           # must match the working stock core: no anet / net.zoneCache poison
           test "$(strings libxray.so | grep -c 'net.zoneCache')" = 0
           test "$(strings libxray.so | grep -c 'wlynxg/anet')" = 0
