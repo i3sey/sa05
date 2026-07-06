@@ -13,6 +13,12 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword
 ).all { !it.isNullOrBlank() }
+val releaseKeystorePath = releaseKeystoreFile?.let(::file)?.canonicalFile
+if (releaseKeystorePath != null) {
+    require(!releaseKeystorePath.toPath().startsWith(rootProject.projectDir.canonicalFile.toPath())) {
+        "RELEASE_KEYSTORE_FILE must point outside the repository"
+    }
+}
 
 android {
     namespace = "com.fife.sa05"
@@ -52,7 +58,7 @@ android {
             isMinifyEnabled = false
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.create("release").apply {
-                    storeFile = file(releaseKeystoreFile!!)
+                    storeFile = releaseKeystorePath
                     storePassword = releaseKeystorePassword
                     keyAlias = releaseKeyAlias
                     keyPassword = releaseKeyPassword
@@ -77,6 +83,21 @@ android {
     packaging {
         jniLibs.useLegacyPackaging = true
     }
+}
+
+val checkRepositorySecrets = tasks.register<Exec>("checkRepositorySecrets") {
+    group = "verification"
+    description = "Fails when Android secrets or local configuration are tracked by Git"
+    workingDir(rootProject.projectDir)
+    commandLine(
+        "bash",
+        project.layout.projectDirectory.file("scripts/check-repository-secrets.sh").asFile,
+        rootProject.projectDir
+    )
+}
+
+tasks.named("preBuild") {
+    dependsOn(checkRepositorySecrets)
 }
 
 dependencies {
