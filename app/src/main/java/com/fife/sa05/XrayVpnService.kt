@@ -1334,9 +1334,12 @@ class XrayVpnService : VpnService() {
             .setSmallIcon(R.drawable.ic_vpn_tile)
             .setContentTitle(text)
             .setContentText(
-                runtime.message.ifBlank { runningLabel.ifBlank { selectedLabel() } }
+                vpnNotificationContentText(
+                    runningProfileName = runtime.profileName,
+                    fallbackProfileName = runningLabel.ifBlank { selectedLabel() }
+                )
             )
-            .setSubText("SA05 ${runningBackend.title}")
+            .setSubText(runtime.message.ifBlank { "SA05 ${runningBackend.title}" })
             .setContentIntent(openApp)
             .addAction(0, "Отключить", stopIntent)
             .addAction(
