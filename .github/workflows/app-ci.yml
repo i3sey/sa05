@@ -1,0 +1,42 @@
+name: Android App CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify workflow contract
+        run: app/scripts/tests/app-ci-workflow-test.sh
+
+      - name: Verify repository secrets
+        run: app/scripts/check-repository-secrets.sh .
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Verify bundled native libraries
+        run: python3 scripts/check-elf-16kb.py app/src/main/jniLibs/arm64-v8a/*.so
+
+      - name: Lint, test, and build app
+        run: ./gradlew lint testDebugUnitTest assembleDev
+
+      - name: Verify APK 16 KB compatibility
+        run: scripts/check-16kb-compat.sh app/build/outputs/apk/dev/app-dev.apk
