@@ -100,12 +100,6 @@ class XrayVpnService : VpnService() {
         val verified: Boolean,
         val score: Int
     )
-    private enum class XrayRuntime {
-        STOPPED,
-        PLAIN_PROFILE,
-        FULL_AUTO_YOUTUBE
-    }
-
     private data class ActiveNetwork(
         val key: String,
         val type: VpnNetworkType
@@ -137,9 +131,10 @@ class XrayVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> stopTunnel()
-            ACTION_START, ACTION_RECONNECT -> beginStart()
+        when (vpnServiceCommand(intent?.action)) {
+            VpnServiceCommand.START -> beginStart()
+            VpnServiceCommand.STOP -> stopTunnel()
+            VpnServiceCommand.IGNORE -> Unit
         }
         return Service.START_NOT_STICKY
     }
@@ -926,20 +921,18 @@ class XrayVpnService : VpnService() {
     }
 
     private fun requiredProcessesRunning(): Boolean {
-        if (tun == null || !isProcessAlive(tun2socksProcess)) return false
-        return when (runningBackend) {
-            VpnBackend.PROXY_ONLY -> isProcessAlive(proxyProcess)
-            VpnBackend.LOCAL_BYPASS ->
-                isProcessAlive(proxyProcess) && isProcessAlive(bridgeProcess) && telegramStarted
-            VpnBackend.FULL_AUTO -> {
-                val base = isProcessAlive(proxyProcess) && telegramStarted
-                if (xrayRuntime == XrayRuntime.FULL_AUTO_YOUTUBE) {
-                    base && isProcessAlive(auxiliaryProcess) && isProcessAlive(bridgeProcess)
-                } else {
-                    base
-                }
-            }
-        }
+        return requiredProcessesRunning(
+            backend = runningBackend,
+            xrayRuntime = xrayRuntime,
+            health = VpnProcessHealth(
+                tun = tun != null,
+                tun2socks = isProcessAlive(tun2socksProcess),
+                proxy = isProcessAlive(proxyProcess),
+                bridge = isProcessAlive(bridgeProcess),
+                auxiliary = isProcessAlive(auxiliaryProcess),
+                telegram = telegramStarted
+            )
+        )
     }
 
     private fun startingComponents(): List<VpnComponentSnapshot> =
