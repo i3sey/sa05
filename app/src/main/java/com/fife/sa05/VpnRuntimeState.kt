@@ -165,7 +165,7 @@ object VpnRuntimeState {
     }
 
     fun clear(context: Context) {
-        publish(context, disconnectedSnapshot(XrayPreferences.vpnBackend(context)))
+        publish(context, disconnectedSnapshot(read(context).backend))
     }
 
     fun clearIfBackend(context: Context, backend: VpnBackend) {

@@ -1,12 +1,56 @@
 package com.fife.sa05
 
 import android.content.Context
+import androidx.datastore.core.DataMigration
+import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.SharedPreferencesMigration
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import java.io.IOException
+import java.security.SecureRandom
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
-import java.security.SecureRandom
+
+private const val XRAY_PREFERENCES_FILE = "xray"
+
+private val Context.xrayDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = XRAY_PREFERENCES_FILE,
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+    produceMigrations = { context -> XrayPreferences.migrations(context) }
+)
+
+internal data class XraySettings(
+    val config: String,
+    val excludedApps: Set<String> = emptySet(),
+    val subscription: SubscriptionState = SubscriptionState(),
+    val dynamicColor: Boolean = true,
+    val vpnBackend: VpnBackend = VpnBackend.PROXY_ONLY,
+    val zapretPreset: ZapretPreset = ZapretPreset.AUTO,
+    val zapretCustomArguments: String = "",
+    val telegramCfEnabled: Boolean = true,
+    val telegramCfDomain: String = "",
+    val telegramSecret: String = "",
+    val telegramProxyApplied: Boolean = false,
+    val zapretAutoCaches: List<ZapretAutoCache> = emptyList(),
+    val youtubeAutoCaches: List<ZapretAutoCache> = emptyList()
+)
 
 object XrayPreferences {
-    private const val FILE = "xray"
     private const val KEY_CONFIG = "config"
     private const val KEY_EXCLUDED = "excluded"
     private const val KEY_SUBSCRIPTION = "subscription"
@@ -29,7 +73,7 @@ object XrayPreferences {
     private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
     private const val MAX_NETWORK_CACHE_ENTRIES = 16
 
-    private val defaultConfig = """
+    internal val defaultConfig = """
         {
           "log": { "loglevel": "warning" },
           "inbounds": [
@@ -52,204 +96,207 @@ object XrayPreferences {
         }
     """.trimIndent()
 
-    fun config(context: Context): String =
-        subscription(context).activeProfile?.json
-            ?: prefs(context).getString(KEY_CONFIG, defaultConfig)
-            ?: defaultConfig
+    private val configKey = stringPreferencesKey(KEY_CONFIG)
+    private val excludedKey = stringSetPreferencesKey(KEY_EXCLUDED)
+    private val subscriptionKey = stringPreferencesKey(KEY_SUBSCRIPTION)
+    private val dynamicColorKey = booleanPreferencesKey(KEY_DYNAMIC_COLOR)
+    private val vpnBackendKey = stringPreferencesKey(KEY_VPN_BACKEND)
+    private val zapretPresetKey = stringPreferencesKey(KEY_ZAPRET_PRESET)
+    private val zapretCustomArgumentsKey = stringPreferencesKey(KEY_ZAPRET_CUSTOM_ARGUMENTS)
+    private val telegramCfEnabledKey = booleanPreferencesKey(KEY_TELEGRAM_CF_ENABLED)
+    private val telegramCfDomainKey = stringPreferencesKey(KEY_TELEGRAM_CF_DOMAIN)
+    private val telegramSecretKey = stringPreferencesKey(KEY_TELEGRAM_SECRET)
+    private val telegramAppliedKey = booleanPreferencesKey(KEY_TELEGRAM_APPLIED)
+    private val zapretCacheMapKey = stringPreferencesKey(KEY_ZAPRET_CACHE_MAP)
+    private val youtubeCacheMapKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_MAP)
+    private val zapretCacheNetworkKey = stringPreferencesKey(KEY_ZAPRET_CACHE_NETWORK)
+    private val zapretCachePresetKey = stringPreferencesKey(KEY_ZAPRET_CACHE_PRESET)
+    private val zapretCacheScoreKey = intPreferencesKey(KEY_ZAPRET_CACHE_SCORE)
+    private val zapretCacheVersionKey = intPreferencesKey(KEY_ZAPRET_CACHE_VERSION)
+    private val youtubeCacheNetworkKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_NETWORK)
+    private val youtubeCachePresetKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_PRESET)
+    private val youtubeCacheVersionKey = intPreferencesKey(KEY_YOUTUBE_CACHE_VERSION)
 
-    fun excludedApps(context: Context): Set<String> =
-        prefs(context).getStringSet(KEY_EXCLUDED, emptySet())?.toSet() ?: emptySet()
+    internal fun migrations(
+        context: Context,
+        sharedPreferencesName: String = XRAY_PREFERENCES_FILE
+    ): List<DataMigration<Preferences>> = listOf(
+        SharedPreferencesMigration(context, sharedPreferencesName)
+    )
 
-    fun saveConfig(context: Context, value: String) {
-        prefs(context).edit().putString(KEY_CONFIG, value).apply()
+    internal fun decodeSettings(preferences: Preferences): XraySettings {
+        val subscription = decodeSubscription(preferences[subscriptionKey])
+        return XraySettings(
+            config = subscription.activeProfile?.json
+                ?: preferences[configKey]
+                ?: defaultConfig,
+            excludedApps = preferences[excludedKey].orEmpty(),
+            subscription = subscription,
+            dynamicColor = preferences[dynamicColorKey] ?: true,
+            vpnBackend = VpnBackend.fromStoredName(preferences[vpnBackendKey]),
+            zapretPreset = ZapretPreset.fromName(preferences[zapretPresetKey]),
+            zapretCustomArguments = preferences[zapretCustomArgumentsKey].orEmpty(),
+            telegramCfEnabled = preferences[telegramCfEnabledKey] ?: true,
+            telegramCfDomain = preferences[telegramCfDomainKey].orEmpty(),
+            telegramSecret = preferences[telegramSecretKey].orEmpty(),
+            telegramProxyApplied = preferences[telegramAppliedKey] ?: false,
+            zapretAutoCaches = migratedZapretAutoCaches(preferences),
+            youtubeAutoCaches = migratedYoutubeAutoCaches(preferences)
+        )
     }
 
-    fun saveExcludedApps(context: Context, value: Set<String>) {
-        prefs(context).edit().putStringSet(KEY_EXCLUDED, value).apply()
+    internal fun settings(context: Context): Flow<XraySettings> =
+        context.applicationContext.xrayDataStore.data
+            .catch { error ->
+                if (error is IOException) emit(emptyPreferences()) else throw error
+            }
+            .map(::decodeSettings)
+            .flowOn(Dispatchers.Default)
+            .distinctUntilChanged()
+
+    internal suspend fun snapshot(context: Context): XraySettings = settings(context).first()
+
+    suspend fun saveConfig(context: Context, value: String) {
+        dataStore(context).edit { it[configKey] = value }
     }
 
-    fun dynamicColor(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_DYNAMIC_COLOR, true)
-
-    fun saveDynamicColor(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_DYNAMIC_COLOR, enabled).apply()
+    suspend fun saveExcludedApps(context: Context, value: Set<String>) {
+        dataStore(context).edit { it[excludedKey] = value }
     }
 
-    fun vpnBackend(context: Context): VpnBackend {
-        val preferences = prefs(context)
-        val stored = preferences.getString(KEY_VPN_BACKEND, null)
-        val backend = VpnBackend.fromStoredName(stored)
-        if (stored != backend.name) {
-            preferences.edit().putString(KEY_VPN_BACKEND, backend.name).apply()
-        }
-        return backend
+    suspend fun saveDynamicColor(context: Context, enabled: Boolean) {
+        dataStore(context).edit { it[dynamicColorKey] = enabled }
     }
 
-    fun saveVpnBackend(context: Context, backend: VpnBackend) {
-        prefs(context).edit().putString(KEY_VPN_BACKEND, backend.name).apply()
+    suspend fun saveVpnBackend(context: Context, backend: VpnBackend) {
+        dataStore(context).edit { it[vpnBackendKey] = backend.name }
         VpnRuntimeState.requestTileRefresh(context)
     }
 
-    fun zapretPreset(context: Context): ZapretPreset =
-        ZapretPreset.fromName(prefs(context).getString(KEY_ZAPRET_PRESET, null))
-
-    fun saveZapretPreset(context: Context, preset: ZapretPreset) {
-        prefs(context).edit().putString(KEY_ZAPRET_PRESET, preset.name).apply()
+    suspend fun saveZapretPreset(context: Context, preset: ZapretPreset) {
+        dataStore(context).edit { it[zapretPresetKey] = preset.name }
         VpnRuntimeState.requestTileRefresh(context)
     }
 
-    fun zapretCustomArguments(context: Context): String =
-        prefs(context).getString(KEY_ZAPRET_CUSTOM_ARGUMENTS, "").orEmpty()
-
-    fun saveZapretCustomArguments(context: Context, value: String) {
+    suspend fun saveZapretCustomArguments(context: Context, value: String) {
         ZapretArguments.parse(value)
-        prefs(context).edit().putString(KEY_ZAPRET_CUSTOM_ARGUMENTS, value.trim()).apply()
+        dataStore(context).edit { it[zapretCustomArgumentsKey] = value.trim() }
     }
 
-    fun telegramCfEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_TELEGRAM_CF_ENABLED, true)
-
-    fun saveTelegramCfEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_TELEGRAM_CF_ENABLED, enabled).apply()
+    suspend fun saveTelegramCfEnabled(context: Context, enabled: Boolean) {
+        dataStore(context).edit { it[telegramCfEnabledKey] = enabled }
     }
 
-    fun telegramCfDomain(context: Context): String =
-        prefs(context).getString(KEY_TELEGRAM_CF_DOMAIN, "").orEmpty()
-
-    fun saveTelegramCfDomain(context: Context, domain: String) {
-        prefs(context).edit().putString(KEY_TELEGRAM_CF_DOMAIN, domain.trim()).apply()
+    suspend fun saveTelegramCfDomain(context: Context, domain: String) {
+        dataStore(context).edit { it[telegramCfDomainKey] = domain.trim() }
     }
 
-    fun telegramSecret(context: Context): String {
-        val current = prefs(context).getString(KEY_TELEGRAM_SECRET, "").orEmpty()
-        if (TelegramProxyConfig.isValidSecret(current)) return current
-        return TelegramProxyConfig.generateSecret().also {
-            prefs(context).edit().putString(KEY_TELEGRAM_SECRET, it).commit()
+    suspend fun telegramSecret(context: Context): String {
+        var result = ""
+        dataStore(context).edit { preferences ->
+            val current = preferences[telegramSecretKey].orEmpty()
+            result = if (TelegramProxyConfig.isValidSecret(current)) {
+                current
+            } else {
+                TelegramProxyConfig.generateSecret().also {
+                    preferences[telegramSecretKey] = it
+                }
+            }
+        }
+        return result
+    }
+
+    suspend fun markTelegramProxyApplied(context: Context) {
+        dataStore(context).edit { it[telegramAppliedKey] = true }
+    }
+
+    suspend fun zapretAutoCache(context: Context, networkKey: String): ZapretAutoCache? =
+        snapshot(context).zapretAutoCaches.lastOrNull { it.networkKey == networkKey }
+
+    suspend fun saveZapretAutoCache(context: Context, cache: ZapretAutoCache) {
+        dataStore(context).edit { preferences ->
+            val caches = upsertCache(migratedZapretAutoCaches(preferences), cache)
+            preferences[zapretCacheMapKey] = encodeAutoCacheMap(caches)
+            clearLegacyZapretCache(preferences)
         }
     }
 
-    fun telegramProxyApplied(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_TELEGRAM_APPLIED, false)
-
-    fun markTelegramProxyApplied(context: Context) {
-        prefs(context).edit().putBoolean(KEY_TELEGRAM_APPLIED, true).apply()
+    suspend fun clearZapretAutoCache(context: Context) {
+        dataStore(context).edit { preferences ->
+            preferences.remove(zapretCacheMapKey)
+            clearLegacyZapretCache(preferences)
+        }
     }
 
-    fun zapretAutoCache(context: Context): ZapretAutoCache? {
-        return readZapretAutoCaches(context).lastOrNull()
+    suspend fun youtubeAutoCache(context: Context, networkKey: String): ZapretAutoCache? =
+        snapshot(context).youtubeAutoCaches.lastOrNull { it.networkKey == networkKey }
+
+    suspend fun saveYoutubeAutoCache(context: Context, cache: ZapretAutoCache) {
+        dataStore(context).edit { preferences ->
+            val caches = upsertCache(migratedYoutubeAutoCaches(preferences), cache)
+            preferences[youtubeCacheMapKey] = encodeAutoCacheMap(caches)
+            clearLegacyYoutubeCache(preferences)
+        }
     }
 
-    fun zapretAutoCache(context: Context, networkKey: String): ZapretAutoCache? {
-        return readZapretAutoCaches(context).lastOrNull { it.networkKey == networkKey }
+    suspend fun clearYoutubeAutoCache(context: Context) {
+        dataStore(context).edit { preferences ->
+            preferences.remove(youtubeCacheMapKey)
+            clearLegacyYoutubeCache(preferences)
+        }
     }
 
-    fun saveZapretAutoCache(context: Context, cache: ZapretAutoCache) {
-        val caches = upsertCache(readZapretAutoCaches(context), cache)
-        prefs(context).edit()
-            .putString(KEY_ZAPRET_CACHE_MAP, encodeAutoCacheMap(caches))
-            .remove(KEY_ZAPRET_CACHE_NETWORK)
-            .remove(KEY_ZAPRET_CACHE_PRESET)
-            .remove(KEY_ZAPRET_CACHE_SCORE)
-            .remove(KEY_ZAPRET_CACHE_VERSION)
-            .apply()
-    }
-
-    fun clearZapretAutoCache(context: Context) {
-        prefs(context).edit()
-            .remove(KEY_ZAPRET_CACHE_MAP)
-            .remove(KEY_ZAPRET_CACHE_NETWORK)
-            .remove(KEY_ZAPRET_CACHE_PRESET)
-            .remove(KEY_ZAPRET_CACHE_SCORE)
-            .remove(KEY_ZAPRET_CACHE_VERSION)
-            .apply()
-    }
-
-    fun youtubeAutoCache(context: Context): ZapretAutoCache? {
-        return readYoutubeAutoCaches(context).lastOrNull()
-    }
-
-    fun youtubeAutoCache(context: Context, networkKey: String): ZapretAutoCache? {
-        return readYoutubeAutoCaches(context).lastOrNull { it.networkKey == networkKey }
-    }
-
-    fun saveYoutubeAutoCache(context: Context, cache: ZapretAutoCache) {
-        val caches = upsertCache(readYoutubeAutoCaches(context), cache)
-        prefs(context).edit()
-            .putString(KEY_YOUTUBE_CACHE_MAP, encodeAutoCacheMap(caches))
-            .remove(KEY_YOUTUBE_CACHE_NETWORK)
-            .remove(KEY_YOUTUBE_CACHE_PRESET)
-            .remove(KEY_YOUTUBE_CACHE_VERSION)
-            .apply()
-    }
-
-    fun clearYoutubeAutoCache(context: Context) {
-        prefs(context).edit()
-            .remove(KEY_YOUTUBE_CACHE_MAP)
-            .remove(KEY_YOUTUBE_CACHE_NETWORK)
-            .remove(KEY_YOUTUBE_CACHE_PRESET)
-            .remove(KEY_YOUTUBE_CACHE_VERSION)
-            .apply()
-    }
-
-    private fun readZapretAutoCaches(context: Context): List<ZapretAutoCache> {
-        val preferences = prefs(context)
-        val caches = decodeAutoCacheMap(preferences.getString(KEY_ZAPRET_CACHE_MAP, null))
-            .toMutableList()
-        legacyZapretAutoCache(context)?.let { legacy ->
+    private fun migratedZapretAutoCaches(preferences: Preferences): List<ZapretAutoCache> {
+        val caches = decodeAutoCacheMap(preferences[zapretCacheMapKey]).toMutableList()
+        legacyZapretAutoCache(preferences)?.let { legacy ->
             if (caches.none { it.networkKey == legacy.networkKey }) caches += legacy
-            preferences.edit()
-                .putString(KEY_ZAPRET_CACHE_MAP, encodeAutoCacheMap(caches))
-                .remove(KEY_ZAPRET_CACHE_NETWORK)
-                .remove(KEY_ZAPRET_CACHE_PRESET)
-                .remove(KEY_ZAPRET_CACHE_SCORE)
-                .remove(KEY_ZAPRET_CACHE_VERSION)
-                .apply()
         }
         return caches
     }
 
-    private fun readYoutubeAutoCaches(context: Context): List<ZapretAutoCache> {
-        val preferences = prefs(context)
-        val caches = decodeAutoCacheMap(preferences.getString(KEY_YOUTUBE_CACHE_MAP, null))
-            .toMutableList()
-        legacyYoutubeAutoCache(context)?.let { legacy ->
+    private fun migratedYoutubeAutoCaches(preferences: Preferences): List<ZapretAutoCache> {
+        val caches = decodeAutoCacheMap(preferences[youtubeCacheMapKey]).toMutableList()
+        legacyYoutubeAutoCache(preferences)?.let { legacy ->
             if (caches.none { it.networkKey == legacy.networkKey }) caches += legacy
-            preferences.edit()
-                .putString(KEY_YOUTUBE_CACHE_MAP, encodeAutoCacheMap(caches))
-                .remove(KEY_YOUTUBE_CACHE_NETWORK)
-                .remove(KEY_YOUTUBE_CACHE_PRESET)
-                .remove(KEY_YOUTUBE_CACHE_VERSION)
-                .apply()
         }
         return caches
     }
 
-    private fun legacyZapretAutoCache(context: Context): ZapretAutoCache? {
-        val preferences = prefs(context)
-        val network = preferences.getString(KEY_ZAPRET_CACHE_NETWORK, "").orEmpty()
+    private fun legacyZapretAutoCache(preferences: Preferences): ZapretAutoCache? {
+        val network = preferences[zapretCacheNetworkKey].orEmpty()
         if (network.isBlank()) return null
         return ZapretAutoCache(
             networkKey = network,
-            preset = ZapretPreset.fromName(
-                preferences.getString(KEY_ZAPRET_CACHE_PRESET, null)
-            ).takeUnless { it == ZapretPreset.AUTO } ?: return null,
-            reachableCount = preferences.getInt(KEY_ZAPRET_CACHE_SCORE, 0),
-            algorithmVersion = preferences.getInt(KEY_ZAPRET_CACHE_VERSION, 0)
+            preset = ZapretPreset.fromName(preferences[zapretCachePresetKey])
+                .takeUnless { it == ZapretPreset.AUTO } ?: return null,
+            reachableCount = preferences[zapretCacheScoreKey] ?: 0,
+            algorithmVersion = preferences[zapretCacheVersionKey] ?: 0
         )
     }
 
-    private fun legacyYoutubeAutoCache(context: Context): ZapretAutoCache? {
-        val preferences = prefs(context)
-        val network = preferences.getString(KEY_YOUTUBE_CACHE_NETWORK, "").orEmpty()
+    private fun legacyYoutubeAutoCache(preferences: Preferences): ZapretAutoCache? {
+        val network = preferences[youtubeCacheNetworkKey].orEmpty()
         if (network.isBlank()) return null
         return ZapretAutoCache(
             networkKey = network,
-            preset = ZapretPreset.fromName(
-                preferences.getString(KEY_YOUTUBE_CACHE_PRESET, null)
-            ).takeUnless { it == ZapretPreset.AUTO } ?: return null,
+            preset = ZapretPreset.fromName(preferences[youtubeCachePresetKey])
+                .takeUnless { it == ZapretPreset.AUTO } ?: return null,
             reachableCount = 1,
-            algorithmVersion = preferences.getInt(KEY_YOUTUBE_CACHE_VERSION, 0)
+            algorithmVersion = preferences[youtubeCacheVersionKey] ?: 0
         )
+    }
+
+    private fun clearLegacyZapretCache(preferences: MutablePreferences) {
+        preferences.remove(zapretCacheNetworkKey)
+        preferences.remove(zapretCachePresetKey)
+        preferences.remove(zapretCacheScoreKey)
+        preferences.remove(zapretCacheVersionKey)
+    }
+
+    private fun clearLegacyYoutubeCache(preferences: MutablePreferences) {
+        preferences.remove(youtubeCacheNetworkKey)
+        preferences.remove(youtubeCachePresetKey)
+        preferences.remove(youtubeCacheVersionKey)
     }
 
     internal fun upsertCache(
@@ -307,8 +354,8 @@ object XrayPreferences {
         return root.toString()
     }
 
-    fun subscription(context: Context): SubscriptionState {
-        val raw = prefs(context).getString(KEY_SUBSCRIPTION, null) ?: return SubscriptionState()
+    internal fun decodeSubscription(raw: String?): SubscriptionState {
+        raw ?: return SubscriptionState()
         return try {
             val root = JSONObject(raw)
             val profilesJson = root.optJSONArray("profiles") ?: JSONArray()
@@ -341,7 +388,11 @@ object XrayPreferences {
         }
     }
 
-    fun saveSubscription(context: Context, state: SubscriptionState) {
+    suspend fun saveSubscription(context: Context, state: SubscriptionState) {
+        dataStore(context).edit { it[subscriptionKey] = encodeSubscription(state) }
+    }
+
+    internal fun encodeSubscription(state: SubscriptionState): String {
         val profiles = JSONArray()
         state.profiles.forEach {
             profiles.put(
@@ -353,7 +404,7 @@ object XrayPreferences {
         }
         val bypass = JSONArray()
         state.suggestedBypassApps.sorted().forEach(bypass::put)
-        val root = JSONObject()
+        return JSONObject()
             .put("url", state.url)
             .put("title", state.title)
             .put("profiles", profiles)
@@ -363,13 +414,11 @@ object XrayPreferences {
             .put("userInfo", state.userInfo)
             .put("updateIntervalHours", state.updateIntervalHours ?: -1)
             .put("suggestedBypassApps", bypass)
-        check(prefs(context).edit().putString(KEY_SUBSCRIPTION, root.toString()).commit()) {
-            "Не удалось сохранить подписку"
-        }
+            .toString()
     }
 
-    private fun prefs(context: Context) =
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    private fun dataStore(context: Context): DataStore<Preferences> =
+        context.applicationContext.xrayDataStore
 }
 
 object TelegramProxyConfig {

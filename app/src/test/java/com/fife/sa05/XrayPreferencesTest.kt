@@ -1,10 +1,66 @@
 package com.fife.sa05
 
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.preferencesOf
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayPreferencesTest {
+    @Test
+    fun dataStoreDefaultsAreSafe() {
+        val settings = XrayPreferences.decodeSettings(emptyPreferences())
+
+        assertEquals(VpnBackend.PROXY_ONLY, settings.vpnBackend)
+        assertEquals(ZapretPreset.AUTO, settings.zapretPreset)
+        assertEquals(true, settings.dynamicColor)
+        assertEquals(true, settings.telegramCfEnabled)
+        assertEquals(XrayPreferences.defaultConfig, settings.config)
+    }
+
+    @Test
+    fun dataStoreSnapshotReadsMigratedPreferences() {
+        val settings = XrayPreferences.decodeSettings(
+            preferencesOf(
+                stringPreferencesKey("vpn_backend") to VpnBackend.PROXY_ONLY.name,
+                stringPreferencesKey("subscription") to
+                    """{"url":"https://example.com/sub","profiles":[]}""",
+                stringSetPreferencesKey("excluded") to setOf("org.example.browser"),
+                booleanPreferencesKey("dynamic_color") to false
+            )
+        )
+
+        assertEquals(VpnBackend.PROXY_ONLY, settings.vpnBackend)
+        assertEquals("https://example.com/sub", settings.subscription.url)
+        assertEquals(setOf("org.example.browser"), settings.excludedApps)
+        assertEquals(false, settings.dynamicColor)
+    }
+
+    @Test
+    fun subscriptionEncodingRoundTripsAllFields() {
+        val state = SubscriptionState(
+            url = "https://example.com/sub",
+            title = "Test",
+            profiles = listOf(
+                SubscriptionProfile("profile-1", "Primary", "{\"inbounds\":[]}")
+            ),
+            activeProfileId = "profile-1",
+            updatedAt = 123L,
+            etag = "etag",
+            userInfo = "upload=1",
+            updateIntervalHours = 12,
+            suggestedBypassApps = setOf("org.example.browser")
+        )
+
+        assertEquals(
+            state,
+            XrayPreferences.decodeSubscription(XrayPreferences.encodeSubscription(state))
+        )
+    }
+
     @Test
     fun autoCacheMapKeepsSeparateNetworks() {
         val caches = listOf(

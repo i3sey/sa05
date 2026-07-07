@@ -86,6 +86,7 @@ class XrayVpnService : VpnService() {
     private var tun2socksProcess: Process? = null
     private var xrayRuntime = XrayRuntime.STOPPED
     private var runningBackend = VpnBackend.PROXY_ONLY
+    private var runningSettings = XraySettings(config = XrayPreferences.defaultConfig)
     private var runningProfile: SubscriptionProfile? = null
     private var runningLabel = ""
     private var activeNetworkKey: String? = null
@@ -141,8 +142,19 @@ class XrayVpnService : VpnService() {
 
     private fun beginStart(recoveryAttempt: Int? = null) {
         explicitStop = false
-        runningBackend = XrayPreferences.vpnBackend(this)
-        if (!SubscriptionAuth.isAuthorized(this)) {
+        startJob?.cancel()
+        fullAutoOptimizationJob?.cancel()
+        val generation = startGeneration.incrementAndGet()
+        startForegroundNow(
+            if (recoveryAttempt == null) STATE_CONNECTING else "Восстановление"
+        )
+        startJob = scope.launch { prepareAndStart(generation, recoveryAttempt) }
+    }
+
+    private suspend fun prepareAndStart(generation: Long, recoveryAttempt: Int?) {
+        runningSettings = XrayPreferences.snapshot(this)
+        runningBackend = runningSettings.vpnBackend
+        if (!SubscriptionAuth.isAuthorized(runningSettings.subscription)) {
             _socksPort.value = null
             publishRuntime(
                 status = VpnRunStatus.ERROR,
@@ -152,7 +164,7 @@ class XrayVpnService : VpnService() {
             stopSelf()
             return
         }
-        runningProfile = XrayPreferences.subscription(this).activeProfile
+        runningProfile = runningSettings.subscription.activeProfile
             .takeIf { runningBackend.usesXrayProfile }
         runningLabel = selectedLabel()
         val network = currentNetwork()
@@ -182,10 +194,7 @@ class XrayVpnService : VpnService() {
             components = startingComponents()
         )
         startForegroundNow(if (status == VpnRunStatus.CONNECTING) STATE_CONNECTING else "Восстановление")
-        startJob?.cancel()
-        fullAutoOptimizationJob?.cancel()
-        val generation = startGeneration.incrementAndGet()
-        startJob = scope.launch { startTunnel(generation, recoveryAttempt) }
+        startTunnel(generation, recoveryAttempt)
     }
 
     private suspend fun startTunnel(generation: Long, recoveryAttempt: Int?) {
@@ -223,7 +232,7 @@ class XrayVpnService : VpnService() {
                     launchFullAutoOptimization(generation, backend.socksPort)
                 } else if (runningBackend == VpnBackend.PROXY_ONLY ||
                     (runningBackend == VpnBackend.LOCAL_BYPASS &&
-                        XrayPreferences.zapretPreset(this) != ZapretPreset.AUTO)
+                        runningSettings.zapretPreset != ZapretPreset.AUTO)
                 ) {
                     verifyRunningTunnel()
                 }
@@ -289,7 +298,7 @@ class XrayVpnService : VpnService() {
 
     private suspend fun startXrayBackend(fullAuto: Boolean = false): Int {
         val rawConfig = XrayConfig.applyBeelinePadding(
-            runningProfile?.json ?: XrayPreferences.config(this)
+            runningProfile?.json ?: runningSettings.config
         )
         val validated = if (fullAuto) {
             XrayConfig.buildFullAutoConfig(rawConfig, ZAPRET_BRIDGE_PORT)
@@ -323,7 +332,7 @@ class XrayVpnService : VpnService() {
     }
 
     private suspend fun startZapretBackend(): BackendStart {
-        val selected = XrayPreferences.zapretPreset(this)
+        val selected = runningSettings.zapretPreset
         if (selected == ZapretPreset.AUTO) {
             val resolved = resolveAutoPreset()
             runningLabel = "[BETA] Авто → ${resolved.preset.title} · Telegram"
@@ -657,8 +666,8 @@ class XrayVpnService : VpnService() {
         val result = TelegramNativeProxy.start(
             cacheDir = cacheDir.absolutePath,
             secret = XrayPreferences.telegramSecret(this),
-            cloudflareEnabled = XrayPreferences.telegramCfEnabled(this),
-            cloudflareDomain = XrayPreferences.telegramCfDomain(this)
+            cloudflareEnabled = runningSettings.telegramCfEnabled,
+            cloudflareDomain = runningSettings.telegramCfDomain
         )
         check(result == 0) { "Telegram Proxy завершился с ошибкой $result" }
         telegramStarted = true
@@ -716,7 +725,7 @@ class XrayVpnService : VpnService() {
                 binary.absolutePath,
                 ZAPRET_SOCKS_PORT,
                 preset,
-                XrayPreferences.zapretCustomArguments(this)
+                runningSettings.zapretCustomArguments
             )
         )
             .directory(filesDir)
@@ -1031,7 +1040,7 @@ class XrayVpnService : VpnService() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
         builder.addDisallowedApplication(packageName)
-        XrayPreferences.excludedApps(this).forEach { pkg ->
+        runningSettings.excludedApps.forEach { pkg ->
             try {
                 builder.addDisallowedApplication(pkg)
             } catch (e: Exception) {
@@ -1199,7 +1208,7 @@ class XrayVpnService : VpnService() {
     private fun selectedLabel(): String = when (runningBackend) {
         VpnBackend.PROXY_ONLY -> selectedProfileLabel()
         VpnBackend.LOCAL_BYPASS ->
-            "[BETA] ${XrayPreferences.zapretPreset(this).title} · Telegram"
+            "[BETA] ${runningSettings.zapretPreset.title} · Telegram"
         VpnBackend.FULL_AUTO -> "[BETA] ${selectedProfileLabel()} · локальный обход"
     }
 

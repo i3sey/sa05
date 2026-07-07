@@ -85,9 +85,9 @@ class SubscriptionRepository(private val context: Context) {
         }
     }
 
-    fun load(): SubscriptionState = XrayPreferences.subscription(context)
+    suspend fun load(): SubscriptionState = XrayPreferences.snapshot(context).subscription
 
-    fun setActiveProfile(id: String): SubscriptionState {
+    suspend fun setActiveProfile(id: String): SubscriptionState {
         val current = load()
         require(current.profiles.any { it.id == id }) { "Профиль не найден" }
         return current.copy(activeProfileId = id).also {
@@ -96,7 +96,7 @@ class SubscriptionRepository(private val context: Context) {
         }
     }
 
-    fun update(inputUrl: String): SubscriptionUpdateResult {
+    suspend fun update(inputUrl: String): SubscriptionUpdateResult {
         val normalizedUrl = validateUrl(inputUrl)
         val previous = load()
         val connection = (URL(normalizedUrl).openConnection() as HttpURLConnection).apply {

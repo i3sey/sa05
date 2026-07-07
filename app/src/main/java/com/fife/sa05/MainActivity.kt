@@ -30,11 +30,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.fife.sa05.screens.AdvancedSettingsScreen
 import com.fife.sa05.screens.AppExclusionList
@@ -52,6 +54,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -73,22 +76,24 @@ class MainActivity : ComponentActivity() {
             pendingSubscriptionUrl.value = it
         }
         setContent {
-            var dynamicColor by remember {
-                mutableStateOf(XrayPreferences.dynamicColor(this))
+            val preferences by produceState<XraySettings?>(initialValue = null) {
+                XrayPreferences.settings(this@MainActivity).collect { value = it }
             }
-            Sa05Theme(dynamicColor = dynamicColor) {
+            val loadedPreferences = preferences ?: return@setContent
+            Sa05Theme(dynamicColor = loadedPreferences.dynamicColor) {
                 var apps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
                 LaunchedEffect(Unit) {
                     apps = withContext(Dispatchers.IO) { loadLaunchableApps() }
                 }
                 XrayScreen(
                     apps = apps,
-                    dynamicColor = dynamicColor,
+                    preferences = loadedPreferences,
                     subscriptionImport = pendingSubscriptionUrl,
                     onSubscriptionImportConsumed = { pendingSubscriptionUrl.value = null },
                     onDynamicColorChanged = {
-                        dynamicColor = it
-                        XrayPreferences.saveDynamicColor(this, it)
+                        lifecycleScope.launch {
+                            XrayPreferences.saveDynamicColor(this@MainActivity, it)
+                        }
                     },
                     requestStart = { requestVpnAndStart() }
                 )
@@ -112,21 +117,27 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestVpnAndStart() {
-        if (!SubscriptionAuth.isAuthorized(this)) {
-            Toast.makeText(this, "Сначала войдите по действующей ссылке", Toast.LENGTH_SHORT)
-                .show()
-            return
+        lifecycleScope.launch {
+            val subscription = XrayPreferences.snapshot(this@MainActivity).subscription
+            if (!SubscriptionAuth.isAuthorized(subscription)) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Сначала войдите по действующей ссылке",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(
+                    this@MainActivity,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return@launch
+            }
+            requestSelectedBackendStart()
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            return
-        }
-        requestSelectedBackendStart()
     }
 
     private fun requestSelectedBackendStart() {
@@ -135,8 +146,11 @@ class MainActivity : ComponentActivity() {
 
     private fun requestVpnPermission() {
         val prepareIntent = VpnService.prepare(this)
-        if (prepareIntent == null) BackendController.startSelected(this)
-        else vpnPermission.launch(prepareIntent)
+        if (prepareIntent == null) {
+            lifecycleScope.launch { BackendController.startSelected(this@MainActivity) }
+        } else {
+            vpnPermission.launch(prepareIntent)
+        }
     }
 
     private val notificationPermission =
@@ -146,9 +160,16 @@ class MainActivity : ComponentActivity() {
 
     private val vpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK && !BackendController.startSelected(this)) {
-                Toast.makeText(this, "Сначала войдите по действующей ссылке", Toast.LENGTH_SHORT)
-                    .show()
+            if (result.resultCode == RESULT_OK) {
+                lifecycleScope.launch {
+                    if (!BackendController.startSelected(this@MainActivity)) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Сначала войдите по действующей ссылке",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
             }
         }
 
@@ -194,7 +215,7 @@ private fun AppScreen?.navDepth(): Int = when (this) {
 @Composable
 private fun XrayScreen(
     apps: List<InstalledApp>,
-    dynamicColor: Boolean,
+    preferences: XraySettings,
     subscriptionImport: MutableStateFlow<String?>,
     onSubscriptionImportConsumed: () -> Unit,
     onDynamicColorChanged: (Boolean) -> Unit,
@@ -202,9 +223,9 @@ private fun XrayScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val repository = remember { SubscriptionRepository(context.applicationContext) }
-    var subscription by remember { mutableStateOf(repository.load()) }
+    val subscription = preferences.subscription
     var urlDraft by remember { mutableStateOf(subscription.url) }
-    var selectedApps by remember { mutableStateOf(XrayPreferences.excludedApps(context)) }
+    var selectedApps by remember { mutableStateOf(preferences.excludedApps) }
     var screen by remember { mutableStateOf(AppScreen.MAIN) }
     var message by remember { mutableStateOf("") }
     var updating by remember { mutableStateOf(false) }
@@ -216,16 +237,16 @@ private fun XrayScreen(
     var activeDiagnosticId by remember { mutableStateOf<String?>(null) }
     var diagnosticRoute by remember { mutableStateOf("") }
     var diagnosticJob by remember { mutableStateOf<Job?>(null) }
-    var selectedBackend by remember { mutableStateOf(XrayPreferences.vpnBackend(context)) }
-    var zapretPreset by remember { mutableStateOf(XrayPreferences.zapretPreset(context)) }
+    var selectedBackend by remember { mutableStateOf(preferences.vpnBackend) }
+    var zapretPreset by remember { mutableStateOf(preferences.zapretPreset) }
     var customZapretArguments by remember {
-        mutableStateOf(XrayPreferences.zapretCustomArguments(context))
+        mutableStateOf(preferences.zapretCustomArguments)
     }
     var telegramCfEnabled by remember {
-        mutableStateOf(XrayPreferences.telegramCfEnabled(context))
+        mutableStateOf(preferences.telegramCfEnabled)
     }
     var telegramCfDomain by remember {
-        mutableStateOf(XrayPreferences.telegramCfDomain(context))
+        mutableStateOf(preferences.telegramCfDomain)
     }
     val scope = rememberCoroutineScope()
     val pingEngine = remember { XrayPingEngine(context.applicationContext) }
@@ -248,24 +269,26 @@ private fun XrayScreen(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun applyTelegramProxy() {
-        val secret = XrayPreferences.telegramSecret(context)
-        val nativeIntent = Intent(
-            Intent.ACTION_VIEW,
-            Uri.parse(TelegramProxyConfig.proxyUri(secret))
-        )
-        val opened = runCatching {
-            context.startActivity(nativeIntent)
-            true
-        }.getOrDefault(false)
-        if (!opened) {
-            context.startActivity(
-                Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(TelegramProxyConfig.proxyUri(secret, webFallback = true))
-                )
+        scope.launch {
+            val secret = XrayPreferences.telegramSecret(context)
+            val nativeIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse(TelegramProxyConfig.proxyUri(secret))
             )
+            val opened = runCatching {
+                context.startActivity(nativeIntent)
+                true
+            }.getOrDefault(false)
+            if (!opened) {
+                context.startActivity(
+                    Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse(TelegramProxyConfig.proxyUri(secret, webFallback = true))
+                    )
+                )
+            }
+            XrayPreferences.markTelegramProxyApplied(context)
         }
-        XrayPreferences.markTelegramProxyApplied(context)
     }
 
     fun updateSubscription(url: String, imported: Boolean = false) {
@@ -275,12 +298,12 @@ private fun XrayScreen(
         scope.launch {
             try {
                 val result = SubscriptionRefreshRunner.refresh(context, url)
-                subscription = when (result) {
+                val refreshed = when (result) {
                     is SubscriptionUpdateResult.Updated -> result.state
                     is SubscriptionUpdateResult.NotModified -> result.state
                 }
-                SubscriptionRefreshScheduler.sync(context, subscription)
-                urlDraft = subscription.url
+                SubscriptionRefreshScheduler.sync(context, refreshed)
+                urlDraft = refreshed.url
                 pingResults = emptyMap()
                 screen = AppScreen.MAIN
                 message = when (result) {
@@ -419,6 +442,27 @@ private fun XrayScreen(
         context.startActivity(AppUpdateInstaller.installIntent(context, file))
     }
 
+    LaunchedEffect(preferences.excludedApps) {
+        selectedApps = preferences.excludedApps
+    }
+    LaunchedEffect(preferences.vpnBackend) {
+        selectedBackend = preferences.vpnBackend
+    }
+    LaunchedEffect(preferences.zapretPreset) {
+        zapretPreset = preferences.zapretPreset
+    }
+    LaunchedEffect(preferences.zapretCustomArguments) {
+        customZapretArguments = preferences.zapretCustomArguments
+    }
+    LaunchedEffect(preferences.telegramCfEnabled) {
+        telegramCfEnabled = preferences.telegramCfEnabled
+    }
+    LaunchedEffect(preferences.telegramCfDomain) {
+        telegramCfDomain = preferences.telegramCfDomain
+    }
+    LaunchedEffect(subscription.url) {
+        if (!updating) urlDraft = subscription.url
+    }
     LaunchedEffect(Unit) {
         checkAppUpdate(notify = true)
         if (subscription.url.isNotBlank() && importUrl == null) {
@@ -434,7 +478,7 @@ private fun XrayScreen(
     LaunchedEffect(selectedBackend, vpnRuntime.status) {
         if (selectedBackend.usesTelegram &&
             vpnRuntime.status == VpnRunStatus.CONNECTED &&
-            !XrayPreferences.telegramProxyApplied(context)
+            !preferences.telegramProxyApplied
         ) {
             applyTelegramProxy()
         }
@@ -504,6 +548,7 @@ private fun XrayScreen(
                     zapretPreset = zapretPreset,
                     telegramCfEnabled = telegramCfEnabled,
                     telegramCfDomain = telegramCfDomain,
+                    telegramProxyApplied = preferences.telegramProxyApplied,
                     updateState = updateState,
                     onRefresh = { updateSubscription(subscription.url) },
                     onSelect = { id ->
@@ -517,16 +562,20 @@ private fun XrayScreen(
                             ProfileSwitchAction.NO_CHANGE -> Unit
 
                             ProfileSwitchAction.SAVE_ONLY -> {
-                                subscription = repository.setActiveProfile(id)
-                                pingResults = emptyMap()
+                                scope.launch {
+                                    repository.setActiveProfile(id)
+                                    pingResults = emptyMap()
+                                }
                             }
 
                             ProfileSwitchAction.SAVE_AND_RECONNECT -> {
-                                subscription = repository.setActiveProfile(id)
-                                pingResults = emptyMap()
-                                XrayVpnService.reconnect(context)
-                                message = "Переподключение: " +
-                                    subscription.activeProfile?.remarks.orEmpty()
+                                scope.launch {
+                                    val updated = repository.setActiveProfile(id)
+                                    pingResults = emptyMap()
+                                    XrayVpnService.reconnect(context)
+                                    message = "Переподключение: " +
+                                        updated.activeProfile?.remarks.orEmpty()
+                                }
                             }
                         }
                     },
@@ -546,9 +595,9 @@ private fun XrayScreen(
                                 VpnRuntimeState.read(context).status != VpnRunStatus.DISCONNECTED
                             if (wasRunning) BackendController.stopRunning(context)
                             selectedBackend = backend
-                            XrayPreferences.saveVpnBackend(context, backend)
-                            if (wasRunning) {
-                                scope.launch {
+                            scope.launch {
+                                XrayPreferences.saveVpnBackend(context, backend)
+                                if (wasRunning) {
                                     delay(400)
                                     requestStart()
                                 }
@@ -558,27 +607,31 @@ private fun XrayScreen(
                     onSelectZapretPreset = { preset ->
                         if (preset != zapretPreset) {
                             zapretPreset = preset
-                            XrayPreferences.saveZapretPreset(context, preset)
-                            if (selectedBackend == VpnBackend.LOCAL_BYPASS &&
-                                backendState != VpnRunStatus.DISCONNECTED
-                            ) {
-                                XrayVpnService.reconnect(context)
+                            scope.launch {
+                                XrayPreferences.saveZapretPreset(context, preset)
+                                if (selectedBackend == VpnBackend.LOCAL_BYPASS &&
+                                    backendState != VpnRunStatus.DISCONNECTED
+                                ) {
+                                    XrayVpnService.reconnect(context)
+                                }
                             }
                         }
                     },
                     onRetryZapretAuto = {
-                        if (selectedBackend == VpnBackend.FULL_AUTO) {
-                            XrayPreferences.clearYoutubeAutoCache(context)
-                        } else {
-                            XrayPreferences.clearZapretAutoCache(context)
-                        }
-                        message = if (selectedBackend != VpnBackend.PROXY_ONLY &&
-                            backendState != VpnRunStatus.DISCONNECTED
-                        ) {
-                            XrayVpnService.reconnect(context)
-                            "Повторный подбор стратегии..."
-                        } else {
-                            "Подбор выполнится при подключении"
+                        scope.launch {
+                            if (selectedBackend == VpnBackend.FULL_AUTO) {
+                                XrayPreferences.clearYoutubeAutoCache(context)
+                            } else {
+                                XrayPreferences.clearZapretAutoCache(context)
+                            }
+                            message = if (selectedBackend != VpnBackend.PROXY_ONLY &&
+                                backendState != VpnRunStatus.DISCONNECTED
+                            ) {
+                                XrayVpnService.reconnect(context)
+                                "Повторный подбор стратегии..."
+                            } else {
+                                "Подбор выполнится при подключении"
+                            }
                         }
                     },
                     onRunDiagnostics = { runDiagnostics() },
@@ -631,7 +684,7 @@ private fun XrayScreen(
                     subscription = subscription,
                     url = urlDraft,
                     updating = updating,
-                    dynamicColor = dynamicColor,
+                    dynamicColor = preferences.dynamicColor,
                     onBack = { screen = AppScreen.MAIN },
                     onUrlChanged = { urlDraft = it },
                     onUpdate = { updateSubscription(urlDraft) },
@@ -656,33 +709,39 @@ private fun XrayScreen(
                         customZapretArguments = it
                     },
                     onSaveCustomZapretArguments = {
-                        try {
-                            XrayPreferences.saveZapretCustomArguments(
-                                context,
-                                customZapretArguments
-                            )
-                            message = "Параметры ByeDPI сохранены"
-                        } catch (e: IllegalArgumentException) {
-                            message = e.message ?: "Некорректные параметры ByeDPI"
+                        scope.launch {
+                            try {
+                                XrayPreferences.saveZapretCustomArguments(
+                                    context,
+                                    customZapretArguments
+                                )
+                                message = "Параметры ByeDPI сохранены"
+                            } catch (e: IllegalArgumentException) {
+                                message = e.message ?: "Некорректные параметры ByeDPI"
+                            }
                         }
                     },
                     onTelegramCfEnabledChanged = {
                         telegramCfEnabled = it
-                        XrayPreferences.saveTelegramCfEnabled(context, it)
-                        if (selectedBackend.usesTelegram &&
-                            backendState == VpnRunStatus.CONNECTED
-                        ) {
-                            XrayVpnService.reconnect(context)
+                        scope.launch {
+                            XrayPreferences.saveTelegramCfEnabled(context, it)
+                            if (selectedBackend.usesTelegram &&
+                                backendState == VpnRunStatus.CONNECTED
+                            ) {
+                                XrayVpnService.reconnect(context)
+                            }
                         }
                     },
                     onTelegramCfDomainChanged = { telegramCfDomain = it },
                     onSaveTelegramCfDomain = {
-                        XrayPreferences.saveTelegramCfDomain(context, telegramCfDomain)
-                        message = "Настройки Telegram Proxy сохранены"
-                        if (selectedBackend.usesTelegram &&
-                            backendState == VpnRunStatus.CONNECTED
-                        ) {
-                            XrayVpnService.reconnect(context)
+                        scope.launch {
+                            XrayPreferences.saveTelegramCfDomain(context, telegramCfDomain)
+                            message = "Настройки Telegram Proxy сохранены"
+                            if (selectedBackend.usesTelegram &&
+                                backendState == VpnRunStatus.CONNECTED
+                            ) {
+                                XrayVpnService.reconnect(context)
+                            }
                         }
                     }
                 )
@@ -692,7 +751,7 @@ private fun XrayScreen(
                 ) {
                     HostPingList(
                         config = subscription.activeProfile?.json
-                            ?: XrayPreferences.config(context),
+                            ?: preferences.config,
                         results = pingResults,
                         activePing = activePing,
                         onPing = { host ->
@@ -701,7 +760,7 @@ private fun XrayScreen(
                             activePing = host.id
                             pingResults = pingResults + (host.id to "Проверка...")
                             val config = subscription.activeProfile?.json
-                                ?: XrayPreferences.config(context)
+                                ?: preferences.config
                             pingJob = scope.launch {
                                 try {
                                     val delayMs = pingEngine.ping(config, host)
@@ -732,7 +791,9 @@ private fun XrayScreen(
                         suggested = subscription.suggestedBypassApps,
                         onImportSuggested = {
                             selectedApps += subscription.suggestedBypassApps
-                            XrayPreferences.saveExcludedApps(context, selectedApps)
+                            scope.launch {
+                                XrayPreferences.saveExcludedApps(context, selectedApps)
+                            }
                             message = "Исключения подписки добавлены"
                         },
                         onToggle = { pkg ->
@@ -741,7 +802,9 @@ private fun XrayScreen(
                             } else {
                                 selectedApps + pkg
                             }
-                            XrayPreferences.saveExcludedApps(context, selectedApps)
+                            scope.launch {
+                                XrayPreferences.saveExcludedApps(context, selectedApps)
+                            }
                         },
                         modifier = Modifier.weight(1f)
                     )

@@ -12,8 +12,10 @@ internal fun startAuthorizedBackend(
 }
 
 object BackendController {
-    fun startSelected(context: Context): Boolean =
-        startAuthorizedBackend(SubscriptionAuth.isAuthorized(context)) {
+    suspend fun startSelected(context: Context): Boolean =
+        startAuthorizedBackend(
+            SubscriptionAuth.isAuthorized(XrayPreferences.snapshot(context).subscription)
+        ) {
             XrayVpnService.start(context)
         }
 

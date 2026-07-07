@@ -10,15 +10,32 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class VpnQuickSettingsTile : TileService() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onStartListening() {
         super.onStartListening()
-        updateTile()
+        scope.launch { updateTile() }
     }
 
     override fun onClick() {
         super.onClick()
+        scope.launch { handleClick() }
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private suspend fun handleClick() {
+        val settings = XrayPreferences.snapshot(this)
         val runtime = VpnRuntimeState.read(this)
         if (runtime.status in setOf(
                 VpnRunStatus.CONNECTING,
@@ -29,13 +46,13 @@ class VpnQuickSettingsTile : TileService() {
         ) {
             BackendController.stopRunning(this)
             VpnRuntimeState.clear(this)
-            renderTile(VpnRuntimeState.read(this))
+            renderTile(VpnRuntimeState.read(this), settings)
             return
         }
 
-        val backend = XrayPreferences.vpnBackend(this)
-        if (!SubscriptionAuth.isAuthorized(this)) {
-            renderTile(VpnRuntimeState.read(this))
+        val backend = settings.vpnBackend
+        if (!SubscriptionAuth.isAuthorized(settings.subscription)) {
+            renderTile(VpnRuntimeState.read(this), settings)
             openAppForPermission()
             return
         }
@@ -43,19 +60,19 @@ class VpnQuickSettingsTile : TileService() {
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
+        ) != PackageManager.PERMISSION_GRANTED
         if (VpnService.prepare(this) == null && !notificationDenied) {
-            val selected = selectedLabel(backend)
+            val selected = selectedLabel(backend, settings)
             VpnRuntimeState.write(
                 this,
                 VpnRunStatus.CONNECTING,
                 backend,
                 profileName = selected
             )
-            renderTile(VpnRuntimeState.read(this))
+            renderTile(VpnRuntimeState.read(this), settings)
             if (!BackendController.startSelected(this)) {
                 VpnRuntimeState.clear(this)
-                renderTile(VpnRuntimeState.read(this))
+                renderTile(VpnRuntimeState.read(this), settings)
                 openAppForPermission()
             }
         } else {
@@ -63,14 +80,14 @@ class VpnQuickSettingsTile : TileService() {
         }
     }
 
-    private fun updateTile() {
-        renderTile(VpnRuntimeState.read(this))
+    private suspend fun updateTile() {
+        renderTile(VpnRuntimeState.read(this), XrayPreferences.snapshot(this))
     }
 
-    private fun renderTile(runtime: VpnRuntimeSnapshot) {
+    private fun renderTile(runtime: VpnRuntimeSnapshot, settings: XraySettings) {
         val tile = qsTile ?: return
-        val backend = XrayPreferences.vpnBackend(this)
-        val selected = selectedLabel(backend)
+        val backend = settings.vpnBackend
+        val selected = selectedLabel(backend, settings)
         tile.state = when (runtime.status) {
             VpnRunStatus.CONNECTED -> Tile.STATE_ACTIVE
             VpnRunStatus.CONNECTING -> Tile.STATE_ACTIVE
@@ -87,7 +104,9 @@ class VpnQuickSettingsTile : TileService() {
                 VpnRunStatus.RECOVERING -> "Восстановление"
                 VpnRunStatus.WAITING_FOR_NETWORK -> "Ожидание сети"
                 VpnRunStatus.ERROR -> "Нужна проверка"
-                VpnRunStatus.DISCONNECTED -> if (SubscriptionAuth.isAuthorized(this)) {
+                VpnRunStatus.DISCONNECTED -> if (
+                    SubscriptionAuth.isAuthorized(settings.subscription)
+                ) {
                     selected.ifBlank { "Отключено" }
                 } else {
                     "Нужна ссылка"
@@ -105,14 +124,14 @@ class VpnQuickSettingsTile : TileService() {
         tile.updateTile()
     }
 
-    private fun selectedLabel(backend: VpnBackend): String = when (backend) {
+    private fun selectedLabel(backend: VpnBackend, settings: XraySettings): String = when (backend) {
         VpnBackend.PROXY_ONLY ->
-            XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
+            settings.subscription.activeProfile?.remarks.orEmpty()
                 .ifBlank { "Xray" }
         VpnBackend.LOCAL_BYPASS ->
-            "[BETA] ${XrayPreferences.zapretPreset(this).title} + Telegram"
+            "[BETA] ${settings.zapretPreset.title} + Telegram"
         VpnBackend.FULL_AUTO ->
-            "[BETA] " + XrayPreferences.subscription(this).activeProfile?.remarks.orEmpty()
+            "[BETA] " + settings.subscription.activeProfile?.remarks.orEmpty()
                 .ifBlank { "Xray" } + " + локальный обход"
     }
 

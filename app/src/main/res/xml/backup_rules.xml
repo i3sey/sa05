@@ -7,4 +7,5 @@
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="xray.xml" />
+    <exclude domain="file" path="datastore/xray.preferences_pb" />
 </full-backup-content>

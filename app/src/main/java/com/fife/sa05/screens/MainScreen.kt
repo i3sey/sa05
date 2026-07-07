@@ -199,6 +199,7 @@ private fun RedesignedMainScreen(
     zapretPreset: ZapretPreset,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
+    telegramProxyApplied: Boolean,
     updateState: AppUpdateState,
     onRefresh: () -> Unit,
     onSelect: (String) -> Unit,
@@ -217,7 +218,6 @@ private fun RedesignedMainScreen(
     onSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     val haptic = LocalHapticFeedback.current
     val runtime = vpnRuntime
     val presentation = remember(runtime) { vpnStatusPresentation(runtime) }
@@ -1023,7 +1023,7 @@ private fun RedesignedMainScreen(
 
         if (selectedBackend.usesTelegram &&
             connected &&
-            !XrayPreferences.telegramProxyApplied(context)
+            !telegramProxyApplied
         ) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -1073,6 +1073,7 @@ internal fun ColumnScope.MainScreen(
     zapretPreset: ZapretPreset,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
+    telegramProxyApplied: Boolean,
     updateState: AppUpdateState,
     onRefresh: () -> Unit,
     onSelect: (String) -> Unit,
@@ -1103,6 +1104,7 @@ internal fun ColumnScope.MainScreen(
         zapretPreset = zapretPreset,
         telegramCfEnabled = telegramCfEnabled,
         telegramCfDomain = telegramCfDomain,
+        telegramProxyApplied = telegramProxyApplied,
         updateState = updateState,
         onRefresh = onRefresh,
         onSelect = onSelect,
