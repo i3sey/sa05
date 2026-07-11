@@ -35,6 +35,9 @@ fun AppUpdateCard(
     onOpenUnknownSources: () -> Unit
 ) {
     val checking = updateState == AppUpdateState.Checking
+    val downloading = updateState is AppUpdateState.Available &&
+        updateState.downloadedPath.isNullOrBlank() &&
+        updateState.downloadProgress != null
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -61,7 +64,7 @@ fun AppUpdateCard(
                     color = MaterialTheme.colorScheme.primary
                 )
                 is AppUpdateState.Error -> Text(
-                    "Ошибка проверки: ${updateState.message}",
+                    "Ошибка обновления: ${updateState.message}",
                     color = MaterialTheme.colorScheme.error
                 )
                 is AppUpdateState.Available -> {
@@ -85,7 +88,7 @@ fun AppUpdateCard(
                         )
                         Text(
                             if (progress >= 99) {
-                                "Почти готово"
+                                "Загрузка 99% · завершаем и проверяем файл"
                             } else {
                                 "Загрузка $progress%"
                             },
@@ -123,12 +126,18 @@ fun AppUpdateCard(
             }
             OutlinedButton(
                 onClick = onCheckUpdate,
-                enabled = !checking,
+                enabled = !checking && !downloading,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Default.Refresh, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text(if (checking) "Проверяем..." else "Проверить обновление")
+                Text(
+                    when {
+                        checking -> "Проверяем..."
+                        downloading -> "Скачивание..."
+                        else -> "Проверить обновление"
+                    }
+                )
             }
         }
     }
