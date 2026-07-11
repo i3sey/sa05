@@ -15,6 +15,7 @@ class Sa05Application : Application() {
         // previous TUN and native child processes no longer exist.
         // Isolated diagnostics has no access to app storage or preferences.
         runCatching { VpnRuntimeState.clear(this) }
+        runCatching { TelegramProxyRuntimeState.clear(this) }
         applicationScope.launch {
             runCatching {
                 SubscriptionRefreshScheduler.sync(

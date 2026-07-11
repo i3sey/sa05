@@ -1,5 +1,8 @@
 package com.fife.sa05
 
+internal fun effectiveVpnBackend(settings: XraySettings): VpnBackend =
+    if (settings.advancedModeEnabled) settings.vpnBackend else VpnBackend.PROXY_ONLY
+
 enum class VpnBackend(val title: String) {
     FULL_AUTO("[BETA] Фулл авто"),
     LOCAL_BYPASS("[BETA] Локальный обход"),

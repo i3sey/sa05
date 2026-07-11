@@ -17,6 +17,7 @@ class XrayPreferencesTest {
         assertEquals(VpnBackend.PROXY_ONLY, settings.vpnBackend)
         assertEquals(ZapretPreset.AUTO, settings.zapretPreset)
         assertEquals(true, settings.dynamicColor)
+        assertEquals(false, settings.advancedModeEnabled)
         assertEquals(true, settings.telegramCfEnabled)
         assertEquals(XrayPreferences.defaultConfig, settings.config)
     }
@@ -29,7 +30,8 @@ class XrayPreferencesTest {
                 stringPreferencesKey("subscription") to
                     """{"url":"https://example.com/sub","profiles":[]}""",
                 stringSetPreferencesKey("excluded") to setOf("org.example.browser"),
-                booleanPreferencesKey("dynamic_color") to false
+                booleanPreferencesKey("dynamic_color") to false,
+                booleanPreferencesKey("advanced_mode") to true
             )
         )
 
@@ -37,6 +39,7 @@ class XrayPreferencesTest {
         assertEquals("https://example.com/sub", settings.subscription.url)
         assertEquals(setOf("org.example.browser"), settings.excludedApps)
         assertEquals(false, settings.dynamicColor)
+        assertEquals(true, settings.advancedModeEnabled)
     }
 
     @Test

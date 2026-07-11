@@ -39,6 +39,7 @@ internal data class XraySettings(
     val excludedApps: Set<String> = emptySet(),
     val subscription: SubscriptionState = SubscriptionState(),
     val dynamicColor: Boolean = true,
+    val advancedModeEnabled: Boolean = false,
     val vpnBackend: VpnBackend = VpnBackend.PROXY_ONLY,
     val zapretPreset: ZapretPreset = ZapretPreset.AUTO,
     val zapretCustomArguments: String = "",
@@ -46,6 +47,7 @@ internal data class XraySettings(
     val telegramCfDomain: String = "",
     val telegramSecret: String = "",
     val telegramProxyApplied: Boolean = false,
+    val telegramProxyExplainerSeen: Boolean = false,
     val zapretAutoCaches: List<ZapretAutoCache> = emptyList(),
     val youtubeAutoCaches: List<ZapretAutoCache> = emptyList()
 )
@@ -55,6 +57,7 @@ object XrayPreferences {
     private const val KEY_EXCLUDED = "excluded"
     private const val KEY_SUBSCRIPTION = "subscription"
     private const val KEY_DYNAMIC_COLOR = "dynamic_color"
+    private const val KEY_ADVANCED_MODE = "advanced_mode"
     private const val KEY_VPN_BACKEND = "vpn_backend"
     private const val KEY_ZAPRET_PRESET = "zapret_preset"
     private const val KEY_ZAPRET_CACHE_NETWORK = "zapret_cache_network"
@@ -71,6 +74,7 @@ object XrayPreferences {
     private const val KEY_TELEGRAM_CF_DOMAIN = "telegram_cf_domain"
     private const val KEY_TELEGRAM_SECRET = "telegram_secret"
     private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
+    private const val KEY_TELEGRAM_EXPLAINER_SEEN = "telegram_explainer_seen"
     private const val MAX_NETWORK_CACHE_ENTRIES = 16
 
     internal val defaultConfig = """
@@ -100,6 +104,7 @@ object XrayPreferences {
     private val excludedKey = stringSetPreferencesKey(KEY_EXCLUDED)
     private val subscriptionKey = stringPreferencesKey(KEY_SUBSCRIPTION)
     private val dynamicColorKey = booleanPreferencesKey(KEY_DYNAMIC_COLOR)
+    private val advancedModeKey = booleanPreferencesKey(KEY_ADVANCED_MODE)
     private val vpnBackendKey = stringPreferencesKey(KEY_VPN_BACKEND)
     private val zapretPresetKey = stringPreferencesKey(KEY_ZAPRET_PRESET)
     private val zapretCustomArgumentsKey = stringPreferencesKey(KEY_ZAPRET_CUSTOM_ARGUMENTS)
@@ -107,6 +112,7 @@ object XrayPreferences {
     private val telegramCfDomainKey = stringPreferencesKey(KEY_TELEGRAM_CF_DOMAIN)
     private val telegramSecretKey = stringPreferencesKey(KEY_TELEGRAM_SECRET)
     private val telegramAppliedKey = booleanPreferencesKey(KEY_TELEGRAM_APPLIED)
+    private val telegramExplainerSeenKey = booleanPreferencesKey(KEY_TELEGRAM_EXPLAINER_SEEN)
     private val zapretCacheMapKey = stringPreferencesKey(KEY_ZAPRET_CACHE_MAP)
     private val youtubeCacheMapKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_MAP)
     private val zapretCacheNetworkKey = stringPreferencesKey(KEY_ZAPRET_CACHE_NETWORK)
@@ -133,6 +139,7 @@ object XrayPreferences {
             excludedApps = preferences[excludedKey].orEmpty(),
             subscription = subscription,
             dynamicColor = preferences[dynamicColorKey] ?: true,
+            advancedModeEnabled = preferences[advancedModeKey] ?: false,
             vpnBackend = VpnBackend.fromStoredName(preferences[vpnBackendKey]),
             zapretPreset = ZapretPreset.fromName(preferences[zapretPresetKey]),
             zapretCustomArguments = preferences[zapretCustomArgumentsKey].orEmpty(),
@@ -140,6 +147,7 @@ object XrayPreferences {
             telegramCfDomain = preferences[telegramCfDomainKey].orEmpty(),
             telegramSecret = preferences[telegramSecretKey].orEmpty(),
             telegramProxyApplied = preferences[telegramAppliedKey] ?: false,
+            telegramProxyExplainerSeen = preferences[telegramExplainerSeenKey] ?: false,
             zapretAutoCaches = migratedZapretAutoCaches(preferences),
             youtubeAutoCaches = migratedYoutubeAutoCaches(preferences)
         )
@@ -166,6 +174,11 @@ object XrayPreferences {
 
     suspend fun saveDynamicColor(context: Context, enabled: Boolean) {
         dataStore(context).edit { it[dynamicColorKey] = enabled }
+    }
+
+    suspend fun saveAdvancedModeEnabled(context: Context, enabled: Boolean) {
+        dataStore(context).edit { it[advancedModeKey] = enabled }
+        VpnRuntimeState.requestTileRefresh(context)
     }
 
     suspend fun saveVpnBackend(context: Context, backend: VpnBackend) {
@@ -208,6 +221,10 @@ object XrayPreferences {
 
     suspend fun markTelegramProxyApplied(context: Context) {
         dataStore(context).edit { it[telegramAppliedKey] = true }
+    }
+
+    suspend fun markTelegramProxyExplainerSeen(context: Context) {
+        dataStore(context).edit { it[telegramExplainerSeenKey] = true }
     }
 
     suspend fun zapretAutoCache(context: Context, networkKey: String): ZapretAutoCache? =

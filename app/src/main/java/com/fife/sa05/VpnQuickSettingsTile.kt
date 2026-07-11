@@ -50,7 +50,7 @@ class VpnQuickSettingsTile : TileService() {
             return
         }
 
-        val backend = settings.vpnBackend
+        val backend = effectiveVpnBackend(settings)
         if (!SubscriptionAuth.isAuthorized(settings.subscription)) {
             renderTile(VpnRuntimeState.read(this), settings)
             openAppForPermission()
@@ -86,7 +86,7 @@ class VpnQuickSettingsTile : TileService() {
 
     private fun renderTile(runtime: VpnRuntimeSnapshot, settings: XraySettings) {
         val tile = qsTile ?: return
-        val backend = settings.vpnBackend
+        val backend = effectiveVpnBackend(settings)
         val selected = selectedLabel(backend, settings)
         tile.state = when (runtime.status) {
             VpnRunStatus.CONNECTED -> Tile.STATE_ACTIVE

@@ -63,6 +63,15 @@
         </service>
 
         <service
+            android:name=".TelegramProxyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local Telegram WebSocket proxy controlled by the user" />
+        </service>
+
+        <service
             android:name=".VpnQuickSettingsTile"
             android:exported="true"
             android:icon="@drawable/ic_vpn_tile"

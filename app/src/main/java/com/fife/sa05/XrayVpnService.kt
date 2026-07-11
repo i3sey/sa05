@@ -153,7 +153,7 @@ class XrayVpnService : VpnService() {
 
     private suspend fun prepareAndStart(generation: Long, recoveryAttempt: Int?) {
         runningSettings = XrayPreferences.snapshot(this)
-        runningBackend = runningSettings.vpnBackend
+        runningBackend = effectiveVpnBackend(runningSettings)
         if (!SubscriptionAuth.isAuthorized(runningSettings.subscription)) {
             _socksPort.value = null
             publishRuntime(
@@ -338,10 +338,9 @@ class XrayVpnService : VpnService() {
             runningLabel = "[BETA] Авто → ${resolved.preset.title} · Telegram"
             if (resolved.verified) {
                 _zapretAutoProgress.value = ZapretAutoProgress(
-                    message = "Backend проверен, TUN запущен"
+                    message = "Локальный маршрут готов"
                 )
-                verificationMessage =
-                    "Backend проверен, TUN запущен; проверьте сайт кнопкой «Открыть»"
+                verificationMessage = "Локальный маршрут проверен"
             } else {
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "Строгая проверка не прошла, используется лучший пресет"
@@ -663,29 +662,15 @@ class XrayVpnService : VpnService() {
     }
 
     private suspend fun startTelegramProxy() {
-        val result = TelegramNativeProxy.start(
-            cacheDir = cacheDir.absolutePath,
-            secret = XrayPreferences.telegramSecret(this),
-            cloudflareEnabled = runningSettings.telegramCfEnabled,
-            cloudflareDomain = runningSettings.telegramCfDomain
-        )
-        check(result == 0) { "Telegram Proxy завершился с ошибкой $result" }
-        telegramStarted = true
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                Socket().use {
-                    it.connect(
-                        InetSocketAddress("127.0.0.1", TelegramProxyConfig.PORT),
-                        100
-                    )
-                }
-                return
-            } catch (_: Exception) {
-                delay(100)
-            }
+        TelegramProxyService.acquireForVpn(this)
+        if (!TelegramProxyService.awaitRunning(this)) {
+            TelegramProxyService.releaseForVpn(this)
+            error(
+                TelegramProxyRuntimeState.read(this).message
+                    .ifBlank { "Telegram Proxy не открыл порт ${TelegramProxyConfig.PORT}" }
+            )
         }
-        error("Telegram Proxy не открыл порт ${TelegramProxyConfig.PORT}")
+        telegramStarted = true
     }
 
     private fun verifyRunningTunnel() {
@@ -698,10 +683,13 @@ class XrayVpnService : VpnService() {
                 targetsToTest = ConnectivityDiagnostics.autoTargets
             )
             val tunnelAlive = isProcessAlive(tun2socksProcess) && tun != null
+            val pingMs = results.firstOrNull {
+                it.reachable && it.target.group == DiagnosticGroup.CONTROL
+            }?.delayMs
             verificationMessage = if (
                 tunnelAlive && ConnectivityDiagnostics.bypassWorks(results)
             ) {
-                "Backend и TUN работают; проверьте сайт кнопкой «Открыть»"
+                pingMs?.let { "Пинг: $it мс" } ?: "Подключение проверено"
             } else {
                 "VPN включён, но обход ограничений не подтверждён"
             }
@@ -939,7 +927,7 @@ class XrayVpnService : VpnService() {
                 proxy = isProcessAlive(proxyProcess),
                 bridge = isProcessAlive(bridgeProcess),
                 auxiliary = isProcessAlive(auxiliaryProcess),
-                telegram = telegramStarted
+                telegram = TelegramProxyRuntimeState.read(this).running
             )
         )
     }
@@ -981,7 +969,7 @@ class XrayVpnService : VpnService() {
                 add(
                     VpnComponentSnapshot(
                         VpnRuntimeComponent.TELEGRAM,
-                        state(telegramStarted)
+                        state(TelegramProxyRuntimeState.read(this@XrayVpnService).running)
                     )
                 )
             }
@@ -1179,8 +1167,7 @@ class XrayVpnService : VpnService() {
         stopTransportProcesses()
         if (telegramStarted) {
             telegramStarted = false
-            runCatching { TelegramNativeProxy.stop() }
-                .onFailure { Log.w("TelegramProxy", "Native stop failed", it) }
+            TelegramProxyService.releaseForVpn(this)
         }
     }
 

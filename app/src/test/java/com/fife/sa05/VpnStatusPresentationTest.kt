@@ -17,7 +17,7 @@ class VpnStatusPresentationTest {
             )
         )
 
-        assertEquals("Нужна проверка", presentation.title)
+        assertEquals("Не удалось подключить VPN", presentation.title)
         assertEquals(VpnPrimaryAction.RETRY, presentation.primaryAction)
         assertEquals(
             listOf(VpnSecondaryAction.NETWORK_SETTINGS, VpnSecondaryAction.DIAGNOSTICS),
@@ -77,6 +77,7 @@ class VpnStatusPresentationTest {
             )
         )
 
+        assertEquals("Нужна действующая подписка", presentation.title)
         assertEquals(VpnPrimaryAction.OPEN_SUBSCRIPTION, presentation.primaryAction)
         assertEquals(emptyList<VpnSecondaryAction>(), presentation.secondaryActions)
     }

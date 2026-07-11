@@ -26,12 +26,12 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
     return when (snapshot.status) {
         VpnRunStatus.DISCONNECTED -> VpnStatusPresentation(
             title = "VPN выключен",
-            description = "Выберите режим и нажмите кнопку подключения",
+            description = "Выберите сервер и подключите VPN",
             primaryAction = VpnPrimaryAction.CONNECT,
             secondaryActions = emptyList()
         )
         VpnRunStatus.CONNECTING -> VpnStatusPresentation(
-            title = "Подключение...",
+            title = "Подключаем VPN…",
             description = snapshot.message.ifBlank { profileDescription },
             primaryAction = VpnPrimaryAction.STOP,
             secondaryActions = emptyList()
@@ -52,14 +52,18 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
             secondaryActions = emptyList()
         )
         VpnRunStatus.WAITING_FOR_NETWORK -> VpnStatusPresentation(
-            title = "Ожидаем сеть",
-            description = snapshot.message.ifBlank { "VPN продолжит работу после появления сети" },
+            title = "Нет подключения к сети",
+            description = snapshot.message.ifBlank { "VPN продолжит работу, когда сеть появится" },
             primaryAction = VpnPrimaryAction.STOP,
             secondaryActions = listOf(VpnSecondaryAction.NETWORK_SETTINGS)
         )
         VpnRunStatus.ERROR -> VpnStatusPresentation(
-            title = "Нужна проверка",
-            description = snapshot.message.ifBlank { "VPN не удалось восстановить" },
+            title = if (snapshot.failureKind == VpnFailureKind.AUTHORIZATION) {
+                "Нужна действующая подписка"
+            } else {
+                "Не удалось подключить VPN"
+            },
+            description = snapshot.message.ifBlank { "Повторите попытку или откройте проверку" },
             primaryAction = if (snapshot.failureKind == VpnFailureKind.AUTHORIZATION) {
                 VpnPrimaryAction.OPEN_SUBSCRIPTION
             } else {

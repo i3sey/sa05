@@ -39,6 +39,25 @@ class VpnRuntimeContractInstrumentedTest {
     }
 
     @Test
+    fun telegramProxyServiceIsSeparateFromVpnBinding() {
+        val serviceInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.getServiceInfo(
+                ComponentName(context, TelegramProxyService::class.java),
+                PackageManager.ComponentInfoFlags.of(0)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getServiceInfo(
+                ComponentName(context, TelegramProxyService::class.java),
+                0
+            )
+        }
+
+        assertFalse(serviceInfo.exported)
+        assertFalse(serviceInfo.permission == Manifest.permission.BIND_VPN_SERVICE)
+    }
+
+    @Test
     fun requiredVpnRuntimeFilesArePackaged() {
         val nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir)
         listOf(

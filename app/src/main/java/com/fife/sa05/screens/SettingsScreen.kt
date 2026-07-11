@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -27,6 +28,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -52,6 +54,8 @@ import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.motionEnabled
 import com.fife.sa05.XrayConfig
 import com.fife.sa05.XrayHost
+import com.fife.sa05.VpnBackend
+import com.fife.sa05.ZapretPreset
 import java.text.DateFormat
 import java.util.Date
 
@@ -61,13 +65,14 @@ internal fun ColumnScope.SettingsScreen(
     url: String,
     updating: Boolean,
     dynamicColor: Boolean,
+    advancedModeEnabled: Boolean,
     updateState: AppUpdateState,
     canInstallPackages: Boolean,
     onBack: () -> Unit,
     onUrlChanged: (String) -> Unit,
     onUpdate: () -> Unit,
     onDynamicColorChanged: (Boolean) -> Unit,
-    onHosts: () -> Unit,
+    onAdvancedModeChanged: (Boolean) -> Unit,
     onAdvanced: () -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: (AppRelease) -> Unit,
@@ -80,6 +85,20 @@ internal fun ColumnScope.SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 28.dp)
         ) {
+            item { SectionTitle("Обновление приложения") }
+            item {
+                AppUpdateCard(
+                    currentVersionName = BuildConfig.VERSION_NAME,
+                    currentVersionCode = BuildConfig.VERSION_CODE,
+                    updateState = updateState,
+                    canInstallPackages = canInstallPackages,
+                    onCheckUpdate = onCheckUpdate,
+                    onDownloadUpdate = onDownloadUpdate,
+                    onInstallUpdate = onInstallUpdate,
+                    onOpenUnknownSources = onOpenUnknownSources
+                )
+            }
+
             item { SectionTitle("Подписка") }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -160,21 +179,38 @@ internal fun ColumnScope.SettingsScreen(
                 }
             }
 
-            item { SectionTitle("Подключение") }
+            item { SectionTitle("Для опытных") }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column {
-                        DashboardRow(
-                            title = "Хосты",
-                            subtitle = "Проверка outbound-подключений",
-                            onClick = onHosts
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        DashboardRow(
-                            title = "Расширенные параметры",
-                            subtitle = "Локальный обход и Telegram",
-                            onClick = onAdvanced
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Показывать технические настройки")
+                                Text(
+                                    "Режимы обхода, ByeDPI, Cloudflare и ping хостов",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = advancedModeEnabled,
+                                onCheckedChange = onAdvancedModeChanged
+                            )
+                        }
+                        if (advancedModeEnabled) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            DashboardRow(
+                                title = "Расширенные настройки",
+                                subtitle = "Режимы, обход и Telegram",
+                                onClick = onAdvanced
+                            )
+                        }
                     }
                 }
             }
@@ -208,41 +244,105 @@ internal fun ColumnScope.SettingsScreen(
                 }
             }
 
-            item { SectionTitle("Обновление приложения") }
-            item {
-                AppUpdateCard(
-                    currentVersionName = BuildConfig.VERSION_NAME,
-                    currentVersionCode = BuildConfig.VERSION_CODE,
-                    updateState = updateState,
-                    canInstallPackages = canInstallPackages,
-                    onCheckUpdate = onCheckUpdate,
-                    onDownloadUpdate = onDownloadUpdate,
-                    onInstallUpdate = onInstallUpdate,
-                    onOpenUnknownSources = onOpenUnknownSources
-                )
-            }
         }
     }
 }
 
 @Composable
 internal fun ColumnScope.AdvancedSettingsScreen(
+    selectedBackend: VpnBackend,
+    zapretPreset: ZapretPreset,
     customZapretArguments: String,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
     onBack: () -> Unit,
+    onSelectBackend: (VpnBackend) -> Unit,
+    onSelectZapretPreset: (ZapretPreset) -> Unit,
+    onHosts: () -> Unit,
     onCustomZapretArgumentsChanged: (String) -> Unit,
     onSaveCustomZapretArguments: () -> Unit,
     onTelegramCfEnabledChanged: (Boolean) -> Unit,
     onTelegramCfDomainChanged: (String) -> Unit,
     onSaveTelegramCfDomain: () -> Unit
 ) {
+    var backendPickerVisible by remember { mutableStateOf(false) }
+    var presetPickerVisible by remember { mutableStateOf(false) }
+    if (backendPickerVisible) {
+        AlertDialog(
+            onDismissRequest = { backendPickerVisible = false },
+            title = { Text("Режим VPN") },
+            text = {
+                Column {
+                    VpnBackend.entries.forEach { backend ->
+                        TextButton(
+                            onClick = {
+                                onSelectBackend(backend)
+                                backendPickerVisible = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(backend.title, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = { }
+        )
+    }
+    if (presetPickerVisible) {
+        AlertDialog(
+            onDismissRequest = { presetPickerVisible = false },
+            title = { Text("Стратегия ByeDPI") },
+            text = {
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                    items(ZapretPreset.selectable, key = { it.name }) { preset ->
+                        TextButton(
+                            onClick = {
+                                onSelectZapretPreset(preset)
+                                presetPickerVisible = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(preset.title, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = { }
+        )
+    }
     ContentScreen(title = "Расширенные", onBack = onBack) {
         LazyColumn(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
+            item { SectionTitle("Маршрут") }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        DashboardRow(
+                            title = "Режим VPN",
+                            subtitle = selectedBackend.title,
+                            onClick = { backendPickerVisible = true }
+                        )
+                        if (selectedBackend != VpnBackend.PROXY_ONLY) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            DashboardRow(
+                                title = "Стратегия ByeDPI",
+                                subtitle = zapretPreset.title,
+                                onClick = { presetPickerVisible = true }
+                            )
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        DashboardRow(
+                            title = "Хосты",
+                            subtitle = "Проверка outbound-подключений",
+                            onClick = onHosts
+                        )
+                    }
+                }
+            }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -356,7 +456,10 @@ internal fun HostPingList(
                 color = MaterialTheme.colorScheme.error
             )
             hosts.isNullOrEmpty() -> Text("Прокси-хосты в outbounds не найдены.")
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            else -> LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 items(hosts, key = { it.id }) { host ->
                     Card(modifier = Modifier.fillMaxWidth().animateItem()) {
                         Column(Modifier.padding(12.dp)) {
@@ -407,8 +510,10 @@ internal fun AppExclusionList(
     apps: List<InstalledApp>,
     selected: Set<String>,
     suggested: Set<String>,
+    vpnRunning: Boolean,
     onImportSuggested: () -> Unit,
     onToggle: (String) -> Unit,
+    onReconnect: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var query by remember { mutableStateOf("") }
@@ -419,7 +524,13 @@ internal fun AppExclusionList(
         }
     }
     Column(modifier.padding(top = 8.dp)) {
-        Text("Выбрано: ${selected.size}. Изменения применятся после переподключения.")
+        Text(
+            if (vpnRunning) {
+                "Выбрано: ${selected.size}. Сохранённые изменения применятся после переподключения."
+            } else {
+                "Выбрано: ${selected.size}."
+            }
+        )
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -437,8 +548,18 @@ internal fun AppExclusionList(
                 Text("Добавить исключения подписки (${suggested.size})")
             }
         }
+        if (vpnRunning) {
+            OutlinedButton(
+                onClick = onReconnect,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+            ) {
+                Text("Переподключить и применить")
+            }
+        }
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        LazyColumn {
+        LazyColumn(modifier = Modifier.weight(1f)) {
             items(visibleApps, key = { it.packageName }) { app ->
                 Row(
                     modifier = Modifier

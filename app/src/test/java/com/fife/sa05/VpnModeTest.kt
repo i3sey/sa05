@@ -6,6 +6,20 @@ import org.junit.Test
 
 class VpnModeTest {
     @Test
+    fun normalModeAlwaysUsesProxyOnlyWithoutChangingSavedAdvancedChoice() {
+        val hiddenAdvanced = XraySettings(
+            config = XrayPreferences.defaultConfig,
+            advancedModeEnabled = false,
+            vpnBackend = VpnBackend.FULL_AUTO
+        )
+        val enabledAdvanced = hiddenAdvanced.copy(advancedModeEnabled = true)
+
+        assertEquals(VpnBackend.PROXY_ONLY, effectiveVpnBackend(hiddenAdvanced))
+        assertEquals(VpnBackend.FULL_AUTO, hiddenAdvanced.vpnBackend)
+        assertEquals(VpnBackend.FULL_AUTO, effectiveVpnBackend(enabledAdvanced))
+    }
+
+    @Test
     fun compositeModesExposeRequiredComponents() {
         assertTrue(VpnBackend.FULL_AUTO.usesTelegram)
         assertTrue(VpnBackend.FULL_AUTO.usesXrayProfile)

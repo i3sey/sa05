@@ -1,5 +1,6 @@
 package com.fife.sa05
 
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.Manifest
@@ -21,6 +22,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -46,7 +55,9 @@ import com.fife.sa05.screens.DiagnosticsScreen
 import com.fife.sa05.screens.HostPingList
 import com.fife.sa05.screens.MainScreen
 import com.fife.sa05.screens.SettingsScreen
+import com.fife.sa05.screens.SubscriptionReadyScreen
 import com.fife.sa05.ui.theme.backTransform
+import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.forwardTransform
 import com.fife.sa05.ui.theme.motionEnabled
 import com.fife.sa05.ui.theme.Sa05Theme
@@ -122,55 +133,55 @@ class MainActivity : ComponentActivity() {
             if (!SubscriptionAuth.isAuthorized(subscription)) {
                 Toast.makeText(
                     this@MainActivity,
-                    "Сначала войдите по действующей ссылке",
+                    "Сначала добавьте действующую подписку",
                     Toast.LENGTH_SHORT
                 ).show()
                 return@launch
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(
-                    this@MainActivity,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return@launch
-            }
-            requestSelectedBackendStart()
+            requestVpnPermission()
         }
-    }
-
-    private fun requestSelectedBackendStart() {
-        requestVpnPermission()
     }
 
     private fun requestVpnPermission() {
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent == null) {
-            lifecycleScope.launch { BackendController.startSelected(this@MainActivity) }
+            startSelectedBackend()
         } else {
             vpnPermission.launch(prepareIntent)
         }
     }
 
-    private val notificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            requestSelectedBackendStart()
+    private fun startSelectedBackend() {
+        lifecycleScope.launch {
+            if (!BackendController.startSelected(this@MainActivity)) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Сначала добавьте действующую подписку",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+            requestNotificationPermissionIfNeeded()
         }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private val vpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) {
-                lifecycleScope.launch {
-                    if (!BackendController.startSelected(this@MainActivity)) {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Сначала войдите по действующей ссылке",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
-            }
+            if (result.resultCode == RESULT_OK) startSelectedBackend()
         }
 
     private fun consumeVpnRequest(intent: Intent?) {
@@ -207,9 +218,41 @@ private enum class AppScreen {
 
 /** Navigation depth, drives screen-transition direction (deeper = slide forward). */
 private fun AppScreen?.navDepth(): Int = when (this) {
-    null, AppScreen.MAIN -> 0
-    AppScreen.DIAGNOSTICS, AppScreen.SETTINGS, AppScreen.EXCLUSIONS -> 1
-    AppScreen.ADVANCED, AppScreen.HOSTS -> 2
+    null, AppScreen.MAIN, AppScreen.DIAGNOSTICS, AppScreen.SETTINGS -> 0
+    AppScreen.ADVANCED, AppScreen.HOSTS, AppScreen.EXCLUSIONS -> 1
+}
+
+private fun AppScreen.isTopLevel(): Boolean = this in setOf(
+    AppScreen.MAIN,
+    AppScreen.DIAGNOSTICS,
+    AppScreen.SETTINGS
+)
+
+@Composable
+private fun AppNavigationBar(
+    screen: AppScreen,
+    onSelect: (AppScreen) -> Unit
+) {
+    NavigationBar {
+        NavigationBarItem(
+            selected = screen == AppScreen.MAIN,
+            onClick = { onSelect(AppScreen.MAIN) },
+            icon = { Icon(Icons.Default.Home, contentDescription = null) },
+            label = { androidx.compose.material3.Text("Главная") }
+        )
+        NavigationBarItem(
+            selected = screen == AppScreen.DIAGNOSTICS,
+            onClick = { onSelect(AppScreen.DIAGNOSTICS) },
+            icon = { Icon(Icons.Default.CheckCircle, contentDescription = null) },
+            label = { androidx.compose.material3.Text("Проверка") }
+        )
+        NavigationBarItem(
+            selected = screen == AppScreen.SETTINGS,
+            onClick = { onSelect(AppScreen.SETTINGS) },
+            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+            label = { androidx.compose.material3.Text("Настройки") }
+        )
+    }
 }
 
 @Composable
@@ -228,6 +271,8 @@ private fun XrayScreen(
     var selectedApps by remember { mutableStateOf(preferences.excludedApps) }
     var screen by remember { mutableStateOf(AppScreen.MAIN) }
     var message by remember { mutableStateOf("") }
+    var subscriptionError by remember { mutableStateOf<String?>(null) }
+    var importedSubscription by remember { mutableStateOf<SubscriptionState?>(null) }
     var updating by remember { mutableStateOf(false) }
     var pingResults by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var activePing by remember { mutableStateOf<String?>(null) }
@@ -237,6 +282,11 @@ private fun XrayScreen(
     var activeDiagnosticId by remember { mutableStateOf<String?>(null) }
     var diagnosticRoute by remember { mutableStateOf("") }
     var diagnosticJob by remember { mutableStateOf<Job?>(null) }
+    var connectionCheck by remember {
+        mutableStateOf<ConnectionCheckState>(ConnectionCheckState.Idle)
+    }
+    var quickConnectionCheckJob by remember { mutableStateOf<Job?>(null) }
+    var excludedBrowserTarget by remember { mutableStateOf<DiagnosticTarget?>(null) }
     var selectedBackend by remember { mutableStateOf(preferences.vpnBackend) }
     var zapretPreset by remember { mutableStateOf(preferences.zapretPreset) }
     var customZapretArguments by remember {
@@ -258,14 +308,17 @@ private fun XrayScreen(
     }
     val canInstallPackages by installPermissionMonitor.canInstall.collectAsState()
     val vpnRuntime by VpnRuntimeState.observe(context).collectAsState()
+    val telegramRuntime by TelegramProxyRuntimeState.observe(context).collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
-    val zapretAutoProgress by XrayVpnService.zapretAutoProgress.collectAsState()
     val importUrl by subscriptionImport.collectAsState()
     val backendState = vpnRuntime.status
     val snackbarHostState = remember { SnackbarHostState() }
     val authorized = SubscriptionAuth.isAuthorized(subscription)
     var updateState by remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
     var updateDownloadSession by remember { mutableStateOf(0L) }
+    var updateDownloadJob by remember { mutableStateOf<Job?>(null) }
+    var telegramStartRequested by remember { mutableStateOf(false) }
+    var showTelegramExplainer by remember { mutableStateOf(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun applyTelegramProxy() {
@@ -291,10 +344,27 @@ private fun XrayScreen(
         }
     }
 
-    fun updateSubscription(url: String, imported: Boolean = false) {
+    fun startTelegramOnly() {
+        if (telegramRuntime.status == TelegramProxyRunStatus.STARTING) return
+        telegramStartRequested = true
+        scope.launch {
+            if (!BackendController.startTelegramOnly(context)) {
+                telegramStartRequested = false
+                message = TelegramProxyRuntimeState.read(context).message
+                    .ifBlank { "Не удалось запустить Telegram" }
+            }
+        }
+    }
+
+    fun updateSubscription(
+        url: String,
+        imported: Boolean = false,
+        silent: Boolean = false
+    ) {
         if (updating) return
+        val showFirstImportSuccess = !authorized
+        subscriptionError = null
         updating = true
-        message = if (imported) "Импорт подписки..." else "Обновление подписки..."
         scope.launch {
             try {
                 val result = SubscriptionRefreshRunner.refresh(context, url)
@@ -305,17 +375,74 @@ private fun XrayScreen(
                 SubscriptionRefreshScheduler.sync(context, refreshed)
                 urlDraft = refreshed.url
                 pingResults = emptyMap()
-                screen = AppScreen.MAIN
-                message = when (result) {
-                    is SubscriptionUpdateResult.Updated -> "Подписка обновлена"
-                    is SubscriptionUpdateResult.NotModified -> "Подписка не изменилась"
+                if (showFirstImportSuccess) importedSubscription = refreshed
+                if (!silent && !showFirstImportSuccess) {
+                    message = when (result) {
+                        is SubscriptionUpdateResult.Updated -> "Подписка обновлена"
+                        is SubscriptionUpdateResult.NotModified -> "Подписка уже актуальна"
+                    }
                 }
             } catch (e: Exception) {
-                message = "Ошибка обновления: ${e.message ?: e.javaClass.simpleName}"
+                val error = "Не удалось обновить подписку: " +
+                    (e.message ?: e.javaClass.simpleName)
+                if (!authorized) {
+                    subscriptionError = error
+                } else if (!silent) {
+                    message = error
+                }
             } finally {
                 updating = false
                 if (imported) onSubscriptionImportConsumed()
             }
+        }
+    }
+
+    fun pasteSubscriptionUrl() {
+        val value = context.getSystemService(ClipboardManager::class.java)
+            ?.primaryClip
+            ?.getItemAt(0)
+            ?.coerceToText(context)
+            ?.toString()
+            ?.trim()
+        if (value.isNullOrBlank()) {
+            subscriptionError = "В буфере обмена нет ссылки подписки"
+        } else {
+            urlDraft = value
+            subscriptionError = null
+        }
+    }
+
+    fun openDiagnosticTarget(target: DiagnosticTarget) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target.url))
+        val browserPackage = intent.resolveActivity(context.packageManager)?.packageName
+        if (browserPackage != null && browserPackage in selectedApps) {
+            excludedBrowserTarget = target
+        } else {
+            context.startActivity(intent)
+        }
+    }
+
+    fun runQuickConnectionCheck() {
+        if (backendState != VpnRunStatus.CONNECTED || diagnosticRunning) return
+        val socksPort = activeSocksPort ?: return
+        quickConnectionCheckJob?.cancel()
+        connectionCheck = ConnectionCheckState.Running
+        quickConnectionCheckJob = scope.launch {
+            val result = runCatching {
+                diagnostics.runSocks(
+                    socksPort = socksPort,
+                    resolveForSocks = vpnRuntime.backend == VpnBackend.LOCAL_BYPASS,
+                    targetsToTest = listOf(ConnectivityDiagnostics.target("google"))
+                ).single()
+            }.getOrElse { error ->
+                DiagnosticResult(
+                    target = ConnectivityDiagnostics.target("google"),
+                    status = DiagnosticStatus.FAILED,
+                    error = error.message ?: error.javaClass.simpleName
+                )
+            }
+            connectionCheck = connectionCheckState(result)
+            quickConnectionCheckJob = null
         }
     }
 
@@ -367,7 +494,11 @@ private fun XrayScreen(
         }
     }
 
-    fun checkAppUpdate(notify: Boolean = false) {
+    fun checkAppUpdate(notify: Boolean = false, silent: Boolean = false) {
+        if (updateDownloadJob?.isActive == true) {
+            if (!silent) message = "Дождитесь завершения скачивания обновления"
+            return
+        }
         scope.launch {
             updateState = AppUpdateState.Checking
             val result = try {
@@ -381,11 +512,9 @@ private fun XrayScreen(
                 AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
             }
             updateState = result
-            if (notify) {
-                if (result is AppUpdateState.Available) {
-                    message = "Доступна версия ${result.release.versionName}"
-                }
-            } else {
+            if (!silent && notify && result is AppUpdateState.Available) {
+                message = "Доступна версия ${result.release.versionName}"
+            } else if (!silent && !notify) {
                 message = when (result) {
                     is AppUpdateState.Available -> "Доступна версия ${result.release.versionName}"
                     AppUpdateState.UpToDate -> "Установлена актуальная версия"
@@ -397,8 +526,12 @@ private fun XrayScreen(
     }
 
     fun downloadAppUpdate(release: AppRelease) {
-        scope.launch {
-            val sessionId = ++updateDownloadSession
+        if (updateDownloadJob?.isActive == true) {
+            message = "Обновление уже скачивается"
+            return
+        }
+        val sessionId = ++updateDownloadSession
+        updateDownloadJob = scope.launch {
             updateState = AppUpdateState.Available(release, downloadProgress = 0)
             try {
                 val file = withContext(Dispatchers.IO) {
@@ -421,9 +554,17 @@ private fun XrayScreen(
                     release = release,
                     downloadedPath = file.absolutePath
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (sessionId == updateDownloadSession) {
-                    updateState = AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
+                    updateState = AppUpdateState.Error(
+                        "Не удалось скачать APK: ${e.message ?: e.javaClass.simpleName}"
+                    )
+                }
+            } finally {
+                if (sessionId == updateDownloadSession) {
+                    updateDownloadJob = null
                 }
             }
         }
@@ -464,9 +605,9 @@ private fun XrayScreen(
         if (!updating) urlDraft = subscription.url
     }
     LaunchedEffect(Unit) {
-        checkAppUpdate(notify = true)
+        checkAppUpdate(silent = true)
         if (subscription.url.isNotBlank() && importUrl == null) {
-            updateSubscription(subscription.url)
+            updateSubscription(subscription.url, silent = true)
         }
     }
     LaunchedEffect(importUrl) {
@@ -475,12 +616,30 @@ private fun XrayScreen(
             updateSubscription(it, imported = true)
         }
     }
-    LaunchedEffect(selectedBackend, vpnRuntime.status) {
-        if (selectedBackend.usesTelegram &&
-            vpnRuntime.status == VpnRunStatus.CONNECTED &&
-            !preferences.telegramProxyApplied
+    LaunchedEffect(telegramRuntime.status, telegramStartRequested) {
+        when {
+            telegramRuntime.status == TelegramProxyRunStatus.RUNNING && telegramStartRequested -> {
+                telegramStartRequested = false
+                if (preferences.telegramProxyExplainerSeen) {
+                    applyTelegramProxy()
+                } else {
+                    showTelegramExplainer = true
+                }
+            }
+            telegramRuntime.status == TelegramProxyRunStatus.ERROR && telegramStartRequested -> {
+                telegramStartRequested = false
+                message = telegramRuntime.message.ifBlank { "Не удалось запустить Telegram" }
+            }
+        }
+    }
+    LaunchedEffect(vpnRuntime.status, vpnRuntime.connectedAtMillis, activeSocksPort) {
+        if (vpnRuntime.status == VpnRunStatus.CONNECTED &&
+            vpnRuntime.connectedAtMillis > 0L && activeSocksPort != null
         ) {
-            applyTelegramProxy()
+            runQuickConnectionCheck()
+        } else if (vpnRuntime.status != VpnRunStatus.CONNECTED) {
+            quickConnectionCheckJob?.cancel()
+            connectionCheck = ConnectionCheckState.Idle
         }
     }
     DisposableEffect(pingEngine) {
@@ -506,7 +665,67 @@ private fun XrayScreen(
         }
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+    excludedBrowserTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { excludedBrowserTarget = null },
+            title = { androidx.compose.material3.Text("Браузер откроет сайт напрямую") },
+            text = {
+                androidx.compose.material3.Text(
+                    "Вы исключили браузер из VPN. Поэтому «Открыть» не проверит " +
+                        "маршрут SA05 для ${target.label}."
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target.url)))
+                    excludedBrowserTarget = null
+                }) {
+                    androidx.compose.material3.Text("Открыть напрямую")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { excludedBrowserTarget = null }
+                ) {
+                    androidx.compose.material3.Text("Отмена")
+                }
+            }
+        )
+    }
+
+    if (showTelegramExplainer) {
+        AlertDialog(
+            onDismissRequest = { showTelegramExplainer = false },
+            title = { androidx.compose.material3.Text("Подключаем Telegram") },
+            text = {
+                androidx.compose.material3.Text(
+                    "Сейчас откроется Telegram. Подтвердите использование прокси в самом Telegram. " +
+                        "Этот режим запускает только Telegram Proxy и не включает VPN."
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showTelegramExplainer = false
+                    scope.launch { XrayPreferences.markTelegramProxyExplainerSeen(context) }
+                    applyTelegramProxy()
+                }) { androidx.compose.material3.Text("Открыть Telegram") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showTelegramExplainer = false
+                }) { androidx.compose.material3.Text("Позже") }
+            }
+        )
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        bottomBar = {
+            if (authorized && importedSubscription == null && screen.isTopLevel()) {
+                AppNavigationBar(screen = screen, onSelect = { screen = it })
+            }
+        }
+    ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -517,41 +736,54 @@ private fun XrayScreen(
             AnimatedContent(
                 targetState = navTarget,
                 transitionSpec = {
-                    if (targetState.navDepth() >= initialState.navDepth()) {
-                        forwardTransform(motionOn)
-                    } else {
-                        backTransform(motionOn)
+                    when {
+                        targetState.navDepth() == initialState.navDepth() -> fadeTransform(motionOn)
+                        targetState.navDepth() > initialState.navDepth() -> forwardTransform(motionOn)
+                        else -> backTransform(motionOn)
                     }
                 },
                 label = "screen"
             ) { target ->
               Column(Modifier.fillMaxSize()) {
-                if (target == null) {
-                AuthScreen(
-                    url = urlDraft,
-                    updating = updating,
-                    onUrlChanged = { urlDraft = it },
-                    onSubmit = { updateSubscription(urlDraft) },
-                    modifier = Modifier.fillMaxSize()
-                )
+                val firstImport = importedSubscription
+                if (firstImport != null) {
+                    SubscriptionReadyScreen(
+                        subscription = firstImport,
+                        onConnect = {
+                            importedSubscription = null
+                            screen = AppScreen.MAIN
+                            requestStart()
+                        },
+                        onContinue = {
+                            importedSubscription = null
+                            screen = AppScreen.MAIN
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (target == null) {
+                    AuthScreen(
+                        url = urlDraft,
+                        updating = updating,
+                        errorMessage = subscriptionError,
+                        telegramRuntime = telegramRuntime,
+                        onUrlChanged = {
+                            urlDraft = it
+                            subscriptionError = null
+                        },
+                        onPaste = { pasteSubscriptionUrl() },
+                        onSubmit = { updateSubscription(urlDraft) },
+                        onStartTelegram = { startTelegramOnly() },
+                        onOpenTelegram = { applyTelegramProxy() },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else when (target) {
                 AppScreen.MAIN -> MainScreen(
                     subscription = subscription,
                     vpnRuntime = vpnRuntime,
-                    updating = updating,
-                    diagnosticResults = diagnosticResults,
-                    diagnosticRunning = diagnosticRunning,
-                    activeDiagnosticId = activeDiagnosticId,
-                    diagnosticRoute = diagnosticRoute,
-                    zapretAutoProgress = zapretAutoProgress,
-                    selectedBackend = selectedBackend,
-                    zapretPreset = zapretPreset,
-                    telegramCfEnabled = telegramCfEnabled,
-                    telegramCfDomain = telegramCfDomain,
-                    telegramProxyApplied = preferences.telegramProxyApplied,
+                    connectionCheck = connectionCheck,
+                    telegramRuntime = telegramRuntime,
                     updateState = updateState,
-                    onRefresh = { updateSubscription(subscription.url) },
-                    onSelect = { id ->
+                    onSelectProfile = { id ->
                         when (
                             profileSwitchAction(
                                 currentProfileId = subscription.activeProfile?.id.orEmpty(),
@@ -560,22 +792,16 @@ private fun XrayScreen(
                             )
                         ) {
                             ProfileSwitchAction.NO_CHANGE -> Unit
-
-                            ProfileSwitchAction.SAVE_ONLY -> {
-                                scope.launch {
-                                    repository.setActiveProfile(id)
-                                    pingResults = emptyMap()
-                                }
+                            ProfileSwitchAction.SAVE_ONLY -> scope.launch {
+                                repository.setActiveProfile(id)
+                                pingResults = emptyMap()
                             }
-
-                            ProfileSwitchAction.SAVE_AND_RECONNECT -> {
-                                scope.launch {
-                                    val updated = repository.setActiveProfile(id)
-                                    pingResults = emptyMap()
-                                    XrayVpnService.reconnect(context)
-                                    message = "Переподключение: " +
-                                        updated.activeProfile?.remarks.orEmpty()
-                                }
+                            ProfileSwitchAction.SAVE_AND_RECONNECT -> scope.launch {
+                                val updated = repository.setActiveProfile(id)
+                                pingResults = emptyMap()
+                                XrayVpnService.reconnect(context)
+                                message = "Переподключение: " +
+                                    updated.activeProfile?.remarks.orEmpty()
                             }
                         }
                     },
@@ -589,10 +815,81 @@ private fun XrayScreen(
                             BackendController.stopRunning(context)
                         }
                     },
+                    onStartTelegram = { startTelegramOnly() },
+                    onStopTelegram = { BackendController.stopTelegramOnly(context) },
+                    onOpenTelegram = { applyTelegramProxy() },
+                    onDiagnostics = { screen = AppScreen.DIAGNOSTICS },
+                    onOpenNetworkSettings = {
+                        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            Settings.Panel.ACTION_INTERNET_CONNECTIVITY
+                        } else {
+                            Settings.ACTION_WIRELESS_SETTINGS
+                        }
+                        context.startActivity(Intent(action))
+                    },
+                    onOpenSubscriptionSettings = { screen = AppScreen.SETTINGS },
+                    onExclusions = { screen = AppScreen.EXCLUSIONS },
+                    onOpenUpdate = { screen = AppScreen.SETTINGS },
+                    onSettings = { screen = AppScreen.SETTINGS }
+                )
+                AppScreen.DIAGNOSTICS -> ContentScreen(
+                    title = "Проверка",
+                    onBack = { screen = AppScreen.MAIN }
+                ) {
+                    DiagnosticsScreen(
+                        diagnosticResults = diagnosticResults,
+                        diagnosticRunning = diagnosticRunning,
+                        activeDiagnosticId = activeDiagnosticId,
+                        diagnosticRoute = diagnosticRoute,
+                        advancedModeEnabled = preferences.advancedModeEnabled,
+                        onRunDiagnostics = { runDiagnostics() },
+                        onCancelDiagnostics = { stopDiagnostics() },
+                        onOpenTarget = { target -> openDiagnosticTarget(target) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                AppScreen.SETTINGS -> SettingsScreen(
+                    subscription = subscription,
+                    url = urlDraft,
+                    updating = updating,
+                    dynamicColor = preferences.dynamicColor,
+                    advancedModeEnabled = preferences.advancedModeEnabled,
+                    onBack = { screen = AppScreen.MAIN },
+                    onUrlChanged = { urlDraft = it },
+                    onUpdate = { updateSubscription(urlDraft) },
+                    onDynamicColorChanged = onDynamicColorChanged,
+                    onAdvancedModeChanged = { enabled ->
+                        scope.launch {
+                            val shouldReconnect = !enabled &&
+                                preferences.vpnBackend != VpnBackend.PROXY_ONLY &&
+                                backendState != VpnRunStatus.DISCONNECTED
+                            XrayPreferences.saveAdvancedModeEnabled(context, enabled)
+                            if (shouldReconnect) {
+                                XrayVpnService.reconnect(context)
+                                message = "Включаем обычный режим через выбранный сервер"
+                            }
+                        }
+                    },
+                    onAdvanced = { screen = AppScreen.ADVANCED },
+                    updateState = updateState,
+                    canInstallPackages = canInstallPackages,
+                    onCheckUpdate = { checkAppUpdate() },
+                    onDownloadUpdate = { downloadAppUpdate(it) },
+                    onInstallUpdate = { installDownloadedUpdate(it) },
+                    onOpenUnknownSources = {
+                        context.startActivity(AppUpdateInstaller.unknownSourcesIntent(context))
+                    }
+                )
+                AppScreen.ADVANCED -> AdvancedSettingsScreen(
+                    selectedBackend = selectedBackend,
+                    zapretPreset = zapretPreset,
+                    customZapretArguments = customZapretArguments,
+                    telegramCfEnabled = telegramCfEnabled,
+                    telegramCfDomain = telegramCfDomain,
+                    onBack = { screen = AppScreen.SETTINGS },
                     onSelectBackend = { backend ->
                         if (backend != selectedBackend) {
-                            val wasRunning =
-                                VpnRuntimeState.read(context).status != VpnRunStatus.DISCONNECTED
+                            val wasRunning = backendState != VpnRunStatus.DISCONNECTED
                             if (wasRunning) BackendController.stopRunning(context)
                             selectedBackend = backend
                             scope.launch {
@@ -617,94 +914,7 @@ private fun XrayScreen(
                             }
                         }
                     },
-                    onRetryZapretAuto = {
-                        scope.launch {
-                            if (selectedBackend == VpnBackend.FULL_AUTO) {
-                                XrayPreferences.clearYoutubeAutoCache(context)
-                            } else {
-                                XrayPreferences.clearZapretAutoCache(context)
-                            }
-                            message = if (selectedBackend != VpnBackend.PROXY_ONLY &&
-                                backendState != VpnRunStatus.DISCONNECTED
-                            ) {
-                                XrayVpnService.reconnect(context)
-                                "Повторный подбор стратегии..."
-                            } else {
-                                "Подбор выполнится при подключении"
-                            }
-                        }
-                    },
-                    onRunDiagnostics = { runDiagnostics() },
-                    onCancelDiagnostics = { stopDiagnostics() },
-                    onApplyTelegram = { applyTelegramProxy() },
-                    onDiagnostics = { screen = AppScreen.DIAGNOSTICS },
-                    onOpenNetworkSettings = {
-                        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            Settings.Panel.ACTION_INTERNET_CONNECTIVITY
-                        } else {
-                            Settings.ACTION_WIRELESS_SETTINGS
-                        }
-                        context.startActivity(Intent(action))
-                    },
-                    onOpenSubscriptionSettings = { screen = AppScreen.SETTINGS },
-                    onExclusions = { screen = AppScreen.EXCLUSIONS },
-                    onCheckUpdate = {
-                        if (updateState is AppUpdateState.Available) {
-                            screen = AppScreen.SETTINGS
-                        } else {
-                            checkAppUpdate()
-                        }
-                    },
-                    onSettings = { screen = AppScreen.SETTINGS }
-                )
-                AppScreen.DIAGNOSTICS -> ContentScreen(
-                    title = "Проверка",
-                    onBack = { screen = AppScreen.MAIN }
-                ) {
-                    DiagnosticsScreen(
-                        diagnosticResults = diagnosticResults,
-                        diagnosticRunning = diagnosticRunning,
-                        activeDiagnosticId = activeDiagnosticId,
-                        diagnosticRoute = diagnosticRoute,
-                        onRunDiagnostics = { runDiagnostics() },
-                        onCancelDiagnostics = { stopDiagnostics() },
-                        onOpenTarget = { target ->
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target.url))
-                            val browserPackage = intent.resolveActivity(context.packageManager)
-                                ?.packageName
-                            if (browserPackage != null && browserPackage in selectedApps) {
-                                message = "Браузер исключён из VPN и откроет сайт напрямую"
-                            }
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                AppScreen.SETTINGS -> SettingsScreen(
-                    subscription = subscription,
-                    url = urlDraft,
-                    updating = updating,
-                    dynamicColor = preferences.dynamicColor,
-                    onBack = { screen = AppScreen.MAIN },
-                    onUrlChanged = { urlDraft = it },
-                    onUpdate = { updateSubscription(urlDraft) },
-                    onDynamicColorChanged = onDynamicColorChanged,
                     onHosts = { screen = AppScreen.HOSTS },
-                    onAdvanced = { screen = AppScreen.ADVANCED },
-                    updateState = updateState,
-                    canInstallPackages = canInstallPackages,
-                    onCheckUpdate = { checkAppUpdate() },
-                    onDownloadUpdate = { downloadAppUpdate(it) },
-                    onInstallUpdate = { installDownloadedUpdate(it) },
-                    onOpenUnknownSources = {
-                        context.startActivity(AppUpdateInstaller.unknownSourcesIntent(context))
-                    }
-                )
-                AppScreen.ADVANCED -> AdvancedSettingsScreen(
-                    customZapretArguments = customZapretArguments,
-                    telegramCfEnabled = telegramCfEnabled,
-                    telegramCfDomain = telegramCfDomain,
-                    onBack = { screen = AppScreen.SETTINGS },
                     onCustomZapretArgumentsChanged = {
                         customZapretArguments = it
                     },
@@ -725,11 +935,7 @@ private fun XrayScreen(
                         telegramCfEnabled = it
                         scope.launch {
                             XrayPreferences.saveTelegramCfEnabled(context, it)
-                            if (selectedBackend.usesTelegram &&
-                                backendState == VpnRunStatus.CONNECTED
-                            ) {
-                                XrayVpnService.reconnect(context)
-                            }
+                            TelegramProxyService.reload(context)
                         }
                     },
                     onTelegramCfDomainChanged = { telegramCfDomain = it },
@@ -737,11 +943,7 @@ private fun XrayScreen(
                         scope.launch {
                             XrayPreferences.saveTelegramCfDomain(context, telegramCfDomain)
                             message = "Настройки Telegram Proxy сохранены"
-                            if (selectedBackend.usesTelegram &&
-                                backendState == VpnRunStatus.CONNECTED
-                            ) {
-                                XrayVpnService.reconnect(context)
-                            }
+                            TelegramProxyService.reload(context)
                         }
                     }
                 )
@@ -789,6 +991,7 @@ private fun XrayScreen(
                         apps = apps,
                         selected = selectedApps,
                         suggested = subscription.suggestedBypassApps,
+                        vpnRunning = backendState != VpnRunStatus.DISCONNECTED,
                         onImportSuggested = {
                             selectedApps += subscription.suggestedBypassApps
                             scope.launch {
@@ -804,6 +1007,13 @@ private fun XrayScreen(
                             }
                             scope.launch {
                                 XrayPreferences.saveExcludedApps(context, selectedApps)
+                            }
+                        },
+                        onReconnect = {
+                            scope.launch {
+                                XrayPreferences.saveExcludedApps(context, selectedApps)
+                                XrayVpnService.reconnect(context)
+                                message = "Переподключаем VPN и применяем исключения"
                             }
                         },
                         modifier = Modifier.weight(1f)
