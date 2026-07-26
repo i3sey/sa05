@@ -135,6 +135,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("net.java.dev.jna:jna:5.19.1@aar")
+    // QR encoding for LAN sharing. Pure Java, no Android dependencies.
+    implementation("com.google.zxing:core:3.5.4")
     testImplementation(libs.junit)
     testImplementation("org.json:json:20250517")
     androidTestImplementation(platform(libs.androidx.compose.bom))

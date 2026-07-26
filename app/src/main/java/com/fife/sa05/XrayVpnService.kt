@@ -317,7 +317,7 @@ class XrayVpnService : VpnService() {
         }
         copyGeoAssets()
         val configFile = File(filesDir, "config.json").apply {
-            writeText(validated.runtimeJson)
+            writeText(applyLanSharing(validated.runtimeJson))
         }
         val binary = File(applicationInfo.nativeLibraryDir, "libxray.so")
         check(binary.exists()) { "libxray.so не найден" }
@@ -369,6 +369,38 @@ class XrayVpnService : VpnService() {
         waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 5_000)
         startZapretBridge()
         return BackendStart(ZAPRET_BRIDGE_PORT)
+    }
+
+    /**
+     * Adds the LAN sharing inbound to the runtime config copy only, leaving the saved profile
+     * alone, exactly like the Full Auto augmentation.
+     *
+     * Failing to find a local address is not an error: the user may simply be on mobile data
+     * right now. The VPN still comes up, just without sharing.
+     */
+    private fun applyLanSharing(runtimeJson: String): String {
+        if (!runningSettings.lanSharingEnabled) return runtimeJson
+        val password = runningSettings.lanSharingPassword
+        if (password.isBlank()) {
+            Log.w("LanShare", "Sharing enabled without a password; refusing to open the port")
+            return runtimeJson
+        }
+        val endpoint = lanEndpoints().firstOrNull() ?: run {
+            Log.i("LanShare", "No local network address; sharing stays off this session")
+            return runtimeJson
+        }
+        return runCatching {
+            addLanProxyInbound(
+                raw = runtimeJson,
+                listenAddress = endpoint.address,
+                port = LAN_PROXY_PORT,
+                user = LAN_PROXY_USER,
+                password = password
+            )
+        }.getOrElse {
+            Log.w("LanShare", "Could not add the sharing inbound", it)
+            runtimeJson
+        }
     }
 
     private suspend fun rememberStrategy(fingerprint: NetworkFingerprint, preset: ZapretPreset) {

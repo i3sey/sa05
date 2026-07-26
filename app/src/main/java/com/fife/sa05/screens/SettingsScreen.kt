@@ -55,7 +55,10 @@ import com.fife.sa05.AppUpdateCard
 import com.fife.sa05.AppUpdateState
 import com.fife.sa05.BuildConfig
 import com.fife.sa05.components.DashboardRow
+import com.fife.sa05.components.QrCode
 import com.fife.sa05.components.SectionTitle
+import com.fife.sa05.LAN_PROXY_PORT
+import com.fife.sa05.LAN_PROXY_USER
 import com.fife.sa05.InstalledApp
 import com.fife.sa05.R
 import com.fife.sa05.StrategyExplainer
@@ -268,6 +271,13 @@ internal fun ColumnScope.AdvancedSettingsScreen(
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
     strategyMemoryCount: Int,
+    lanSharingEnabled: Boolean,
+    lanShareUri: String?,
+    lanShareAddress: String?,
+    lanSharePassword: String,
+    onLanSharingChanged: (Boolean) -> Unit,
+    onRotateLanPassword: () -> Unit,
+    onCopyLanUri: () -> Unit,
     onBack: () -> Unit,
     onSelectBackend: (VpnBackend) -> Unit,
     onSelectZapretPreset: (ZapretPreset) -> Unit,
@@ -417,6 +427,88 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                     }
                 }
             }
+            item { SectionTitle("Раздача обхода") }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Раздавать по Wi-Fi",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    "Телевизор, ноутбук или приставка в той же сети смогут " +
+                                        "ходить через ваш туннель.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = lanSharingEnabled,
+                                onCheckedChange = onLanSharingChanged
+                            )
+                        }
+                        if (lanSharingEnabled) {
+                            Text(
+                                "Порт открыт для всех, кто уже в этой сети. В публичном Wi-Fi " +
+                                    "не включайте. Доступ закрыт паролем, трафик гостей идёт " +
+                                    "через вашу подписку и расходует ваш трафик и батарею.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            HorizontalDivider()
+                            if (lanShareUri == null || lanShareAddress == null) {
+                                Text(
+                                    "Локальная сеть не найдена. Подключитесь к Wi-Fi или " +
+                                        "включите точку доступа — адрес появится здесь.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text("Адрес: $lanShareAddress:$LAN_PROXY_PORT")
+                                Text("Логин: $LAN_PROXY_USER")
+                                SelectionContainer {
+                                    Text(
+                                        "Пароль: $lanSharePassword",
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    QrCode(
+                                        content = lanShareUri,
+                                        modifier = Modifier.size(200.dp)
+                                    )
+                                }
+                                Text(
+                                    "Изменения применяются при следующем подключении VPN.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = onCopyLanUri) { Text("Копировать") }
+                                    TextButton(onClick = onRotateLanPassword) {
+                                        Text("Новый пароль")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item { SectionTitle("Стратегии") }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(

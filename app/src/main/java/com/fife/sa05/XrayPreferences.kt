@@ -51,7 +51,9 @@ internal data class XraySettings(
     val telegramProxyExplainerSeen: Boolean = false,
     val zapretAutoCaches: List<ZapretAutoCache> = emptyList(),
     val youtubeAutoCaches: List<ZapretAutoCache> = emptyList(),
-    val strategyMemories: List<StrategyMemory> = emptyList()
+    val strategyMemories: List<StrategyMemory> = emptyList(),
+    val lanSharingEnabled: Boolean = false,
+    val lanSharingPassword: String = ""
 )
 
 object XrayPreferences {
@@ -79,6 +81,8 @@ object XrayPreferences {
     private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
     private const val KEY_TELEGRAM_EXPLAINER_SEEN = "telegram_explainer_seen"
     private const val KEY_STRATEGY_DB = "strategy_db"
+    private const val KEY_LAN_SHARING = "lan_sharing_enabled"
+    private const val KEY_LAN_SHARING_PASSWORD = "lan_sharing_password"
     private const val MAX_NETWORK_CACHE_ENTRIES = 16
 
     internal val defaultConfig = """
@@ -128,6 +132,8 @@ object XrayPreferences {
     private val youtubeCachePresetKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_PRESET)
     private val youtubeCacheVersionKey = intPreferencesKey(KEY_YOUTUBE_CACHE_VERSION)
     private val strategyDbKey = stringPreferencesKey(KEY_STRATEGY_DB)
+    private val lanSharingKey = booleanPreferencesKey(KEY_LAN_SHARING)
+    private val lanSharingPasswordKey = stringPreferencesKey(KEY_LAN_SHARING_PASSWORD)
 
     internal fun migrations(
         context: Context,
@@ -157,7 +163,9 @@ object XrayPreferences {
             telegramProxyExplainerSeen = preferences[telegramExplainerSeenKey] ?: false,
             zapretAutoCaches = migratedZapretAutoCaches(preferences),
             youtubeAutoCaches = migratedYoutubeAutoCaches(preferences),
-            strategyMemories = StrategyDatabase.decode(preferences[strategyDbKey])
+            strategyMemories = StrategyDatabase.decode(preferences[strategyDbKey]),
+            lanSharingEnabled = preferences[lanSharingKey] ?: false,
+            lanSharingPassword = preferences[lanSharingPasswordKey].orEmpty()
         )
     }
 
@@ -237,6 +245,25 @@ object XrayPreferences {
 
     suspend fun markTelegramProxyExplainerSeen(context: Context) {
         dataStore(context).edit { it[telegramExplainerSeenKey] = true }
+    }
+
+    /**
+     * Enabling sharing always rotates the password: a credential that survived being turned off
+     * and on again could still be sitting in someone else's proxy settings.
+     */
+    suspend fun saveLanSharingEnabled(context: Context, enabled: Boolean) {
+        dataStore(context).edit { preferences ->
+            preferences[lanSharingKey] = enabled
+            if (enabled) {
+                preferences[lanSharingPasswordKey] = generateLanProxyPassword()
+            } else {
+                preferences.remove(lanSharingPasswordKey)
+            }
+        }
+    }
+
+    suspend fun rotateLanSharingPassword(context: Context) {
+        dataStore(context).edit { it[lanSharingPasswordKey] = generateLanProxyPassword() }
     }
 
     internal suspend fun strategyMemory(

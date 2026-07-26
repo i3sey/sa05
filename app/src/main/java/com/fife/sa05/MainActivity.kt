@@ -305,6 +305,18 @@ private fun XrayScreen(
     var telegramStartRequested by remember { mutableStateOf(false) }
     var showTelegramExplainer by remember { mutableStateOf(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    // Re-read on every VPN state change: the address appears and disappears with the network.
+    val lanEndpoint by produceState<LanProxyEndpoint?>(
+        initialValue = null,
+        preferences.lanSharingEnabled,
+        vpnRuntime.status
+    ) {
+        value = if (preferences.lanSharingEnabled) {
+            withContext(Dispatchers.IO) { lanEndpoints().firstOrNull() }
+        } else {
+            null
+        }
+    }
     val exportStrategies = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -887,6 +899,48 @@ private fun XrayScreen(
                     customZapretArguments = customZapretArguments,
                     allowIpv6Bypass = allowIpv6Bypass,
                     strategyMemoryCount = preferences.strategyMemories.size,
+                    lanSharingEnabled = preferences.lanSharingEnabled,
+                    lanShareUri = lanEndpoint?.let {
+                        lanProxyShareUri(
+                            address = it.address,
+                            port = LAN_PROXY_PORT,
+                            user = LAN_PROXY_USER,
+                            password = preferences.lanSharingPassword
+                        )
+                    },
+                    lanShareAddress = lanEndpoint?.address,
+                    lanSharePassword = preferences.lanSharingPassword,
+                    onLanSharingChanged = { enabled ->
+                        scope.launch {
+                            XrayPreferences.saveLanSharingEnabled(context, enabled)
+                            message = if (enabled) {
+                                "Раздача включится при следующем подключении VPN"
+                            } else {
+                                "Раздача выключена, пароль сброшен"
+                            }
+                        }
+                    },
+                    onRotateLanPassword = {
+                        scope.launch {
+                            XrayPreferences.rotateLanSharingPassword(context)
+                            message = "Новый пароль применится при следующем подключении VPN"
+                        }
+                    },
+                    onCopyLanUri = {
+                        lanEndpoint?.let { endpoint ->
+                            val uri = lanProxyShareUri(
+                                address = endpoint.address,
+                                port = LAN_PROXY_PORT,
+                                user = LAN_PROXY_USER,
+                                password = preferences.lanSharingPassword
+                            )
+                            context.getSystemService(ClipboardManager::class.java)
+                                ?.setPrimaryClip(
+                                    android.content.ClipData.newPlainText("SA05 proxy", uri)
+                                )
+                            message = "Ссылка скопирована"
+                        }
+                    },
                     telegramCfEnabled = telegramCfEnabled,
                     telegramCfDomain = telegramCfDomain,
                     onBack = { screen = AppScreen.SETTINGS },

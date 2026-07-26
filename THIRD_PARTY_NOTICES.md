@@ -48,6 +48,14 @@ SOFTWARE.
   `328409ea4dfcbc50eb3b9dbc24dec9535442a69d926b91e8fb2578fb7f71abba`
 - License: GPL-3.0
 
+## ZXing Core
+
+- Project: https://github.com/zxing/zxing
+- Version: 3.5.4
+- Artifact: `com.google.zxing:core:3.5.4`
+- Used for: encoding the LAN sharing QR code
+- License: Apache-2.0
+
 The complete GPL-3.0 license is available in the repository root as `LICENSE`.
 The bundled source archive is the preferred source form published for the
 exact tagged release used by this application.
