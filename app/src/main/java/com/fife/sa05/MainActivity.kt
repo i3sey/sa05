@@ -531,6 +531,14 @@ private fun XrayScreen(
             }
         }
     }
+    LaunchedEffect(vpnRuntime.status) {
+        if (vpnRuntime.status == VpnRunStatus.ERROR) {
+            viewModel.checkForWhitelist(
+                profiles = subscription.profiles,
+                activeProfileId = subscription.activeProfile?.id.orEmpty()
+            )
+        }
+    }
     LaunchedEffect(vpnRuntime.status, vpnRuntime.connectedAtMillis, activeSocksPort) {
         if (vpnRuntime.status == VpnRunStatus.CONNECTED &&
             vpnRuntime.connectedAtMillis > 0L && activeSocksPort != null
@@ -703,6 +711,16 @@ private fun XrayScreen(
                     advancedModeEnabled = preferences.advancedModeEnabled,
                     pings = uiState.pings,
                     refreshing = updating,
+                    whitelistBypassProfile = uiState.whitelistBypassProfile,
+                    onSwitchToWhitelistBypass = {
+                        uiState.whitelistBypassProfile?.let {
+                            viewModel.switchToWhitelistBypass(
+                                profile = it,
+                                currentProfileId = subscription.activeProfile?.id.orEmpty()
+                            )
+                        }
+                    },
+                    onDismissWhitelistSuggestion = { viewModel.dismissWhitelistSuggestion() },
                     onRefreshSubscription = {
                         if (subscription.url.isNotBlank()) updateSubscription(subscription.url)
                     },
@@ -759,6 +777,18 @@ private fun XrayScreen(
                         },
                         onCancelDiagnostics = { diagnosticsViewModel.cancel() },
                         onOpenTarget = { target -> openDiagnosticTarget(target) },
+                        whitelistBypassProfileName = uiState.whitelistBypassProfile?.remarks
+                            ?: findWhitelistBypassProfile(subscription.profiles)
+                                ?.takeIf { it.id != subscription.activeProfile?.id }
+                                ?.remarks,
+                        onSwitchToWhitelistBypass = {
+                            findWhitelistBypassProfile(subscription.profiles)?.let {
+                                viewModel.switchToWhitelistBypass(
+                                    profile = it,
+                                    currentProfileId = subscription.activeProfile?.id.orEmpty()
+                                )
+                            }
+                        },
                         onShareReport = {
                             scope.launch {
                                 val intent = withContext(Dispatchers.IO) {

@@ -24,7 +24,9 @@ internal data class MainUiState(
     val subscriptionError: String? = null,
     val importedSubscription: SubscriptionState? = null,
     val pings: Map<String, ProfilePing> = emptyMap(),
-    val activePingProfileId: String? = null
+    val activePingProfileId: String? = null,
+    /** Set when the network looks like an allow-list and the subscription can get out of it. */
+    val whitelistBypassProfile: SubscriptionProfile? = null
 )
 
 /**
@@ -47,6 +49,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
 
     private var quickCheckJob: Job? = null
     private var pingJob: Job? = null
+    private var whitelistCheckJob: Job? = null
 
     fun postMessage(message: String) {
         _messages.value = message
@@ -156,6 +159,51 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
             }
             _state.update { it.copy(connectionCheck = connectionCheckState(result)) }
             quickCheckJob = null
+        }
+    }
+
+    /**
+     * Looks for an operator allow-list after the VPN has failed to come up.
+     *
+     * That failure is the moment worth spending probes on: under an allow-list the server the
+     * profile dials is off the list too, so the VPN cannot connect and the user is left with a
+     * dead app and no idea why. The probes go out directly, not through the tunnel, because the
+     * tunnel is exactly what is not working.
+     */
+    fun checkForWhitelist(profiles: List<SubscriptionProfile>, activeProfileId: String) {
+        val bypass = findWhitelistBypassProfile(profiles) ?: return
+        if (bypass.id == activeProfileId) return
+        if (whitelistCheckJob?.isActive == true) return
+        whitelistCheckJob = viewModelScope.launch {
+            val results = runCatching {
+                diagnostics.runDirect(
+                    listOf(
+                        ConnectivityDiagnostics.target("yandex"),
+                        ConnectivityDiagnostics.target("google"),
+                        ConnectivityDiagnostics.target("youtube")
+                    )
+                )
+            }.getOrDefault(emptyList())
+            if (detectWhitelist(results).suspected) {
+                _state.update { it.copy(whitelistBypassProfile = bypass) }
+            }
+        }
+    }
+
+    fun dismissWhitelistSuggestion() {
+        _state.update { it.copy(whitelistBypassProfile = null) }
+    }
+
+    /** Switches to the allow-list profile and reconnects, which is the whole point of the offer. */
+    fun switchToWhitelistBypass(profile: SubscriptionProfile, currentProfileId: String) {
+        dismissWhitelistSuggestion()
+        viewModelScope.launch {
+            SubscriptionRepository(context).setActiveProfile(profile.id)
+            _state.update { it.copy(pings = emptyMap()) }
+            if (currentProfileId != profile.id) {
+                XrayVpnService.reconnect(context)
+            }
+            postMessage("Переключаемся на «${profile.remarks}»")
         }
     }
 

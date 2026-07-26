@@ -128,6 +128,9 @@ internal fun ColumnScope.MainScreen(
     advancedModeEnabled: Boolean,
     pings: Map<String, ProfilePing>,
     refreshing: Boolean,
+    whitelistBypassProfile: SubscriptionProfile?,
+    onSwitchToWhitelistBypass: () -> Unit,
+    onDismissWhitelistSuggestion: () -> Unit,
     onRefreshSubscription: () -> Unit,
     onSelectProfile: (String) -> Unit,
     onPingProfile: (SubscriptionProfile) -> Unit,
@@ -239,6 +242,49 @@ internal fun ColumnScope.MainScreen(
                 onChangeProfile = { profileSheetVisible = true },
                 onDiagnostics = onDiagnostics
             )
+        }
+        // Sits directly under the connect control: the user just watched the VPN fail and this
+        // is the answer to why.
+        whitelistBypassProfile?.let { profile ->
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(Space.Content),
+                        verticalArrangement = Arrangement.spacedBy(Space.Tight)
+                    ) {
+                        Text(
+                            "Похоже, оператор включил белый список",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "Российские сервисы открываются, остальное — нет. Обычные серверы " +
+                                "в такой сети недоступны, поэтому VPN и не подключился.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Button(
+                            onClick = onSwitchToWhitelistBypass,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "Перейти на «" +
+                                    parseServerRemark(profile.remarks).name.ifBlank {
+                                        profile.remarks
+                                    } + "»"
+                            )
+                        }
+                        TextButton(
+                            onClick = onDismissWhitelistSuggestion,
+                            modifier = Modifier.align(Alignment.End)
+                        ) { Text("Не сейчас") }
+                    }
+                }
+            }
         }
         if (updateState is AppUpdateState.Available) {
             item {

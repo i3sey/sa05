@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +35,7 @@ import com.fife.sa05.DiagnosticResult
 import com.fife.sa05.DiagnosticStatus
 import com.fife.sa05.DiagnosticTarget
 import com.fife.sa05.connectionCheckSummary
+import com.fife.sa05.detectWhitelist
 import com.fife.sa05.ui.theme.Space
 import com.fife.sa05.ui.theme.motionTween
 import com.fife.sa05.ui.theme.tabularFigures
@@ -104,6 +106,8 @@ internal fun DiagnosticsScreen(
     onCancelDiagnostics: () -> Unit,
     onOpenTarget: (DiagnosticTarget) -> Unit,
     onShareReport: () -> Unit,
+    whitelistBypassProfileName: String?,
+    onSwitchToWhitelistBypass: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val results = diagnosticResults.orEmpty()
@@ -111,6 +115,7 @@ internal fun DiagnosticsScreen(
         connectionCheckSummary(results, diagnosticRunning)
     }
     var showTechnicalDetails by remember { mutableStateOf(false) }
+    val whitelistSuspected = remember(results) { detectWhitelist(results).suspected }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -164,6 +169,39 @@ internal fun DiagnosticsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(if (results.isEmpty()) "Проверить подключение" else "Проверить снова")
+                        }
+                    }
+                }
+            }
+        }
+        if (whitelistSuspected && whitelistBypassProfileName != null) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                ) {
+                    Column(
+                        Modifier.padding(Space.Content),
+                        verticalArrangement = Arrangement.spacedBy(Space.Tight)
+                    ) {
+                        Text(
+                            "Похоже, оператор включил белый список",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "Российские сервисы открываются, а всё остальное — нет. Обычные " +
+                                "серверы в такой сети недоступны, но в вашей подписке есть " +
+                                "профиль, рассчитанный на этот случай.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Button(
+                            onClick = onSwitchToWhitelistBypass,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Перейти на «$whitelistBypassProfileName»")
                         }
                     }
                 }
