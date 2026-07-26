@@ -22,3 +22,9 @@ grep -F 'run: scripts/check-16kb-compat.sh app/build/outputs/apk/dev/app-dev.apk
     "$workflow" >/dev/null
 grep -F 'run: app/scripts/check-repository-secrets.sh .' "$workflow" >/dev/null
 grep -F 'run: app/scripts/tests/app-ci-workflow-test.sh' "$workflow" >/dev/null
+# R8 runs on release only, so the minified build and its keep-rule check are the gate.
+grep -F 'run: ./gradlew assembleRelease' "$workflow" >/dev/null
+grep -F 'run: app/scripts/check-r8-keeps.sh app/build/outputs/apk/release/app-release.apk' \
+    "$workflow" >/dev/null
+grep -F 'run: scripts/check-16kb-compat.sh app/build/outputs/apk/release/app-release.apk' \
+    "$workflow" >/dev/null

@@ -41,6 +41,7 @@ internal data class XraySettings(
     val dynamicColor: Boolean = true,
     val advancedModeEnabled: Boolean = false,
     val vpnBackend: VpnBackend = VpnBackend.PROXY_ONLY,
+    val allowIpv6Bypass: Boolean = false,
     val zapretPreset: ZapretPreset = ZapretPreset.AUTO,
     val zapretCustomArguments: String = "",
     val telegramCfEnabled: Boolean = true,
@@ -59,6 +60,7 @@ object XrayPreferences {
     private const val KEY_DYNAMIC_COLOR = "dynamic_color"
     private const val KEY_ADVANCED_MODE = "advanced_mode"
     private const val KEY_VPN_BACKEND = "vpn_backend"
+    private const val KEY_ALLOW_IPV6_BYPASS = "allow_ipv6_bypass"
     private const val KEY_ZAPRET_PRESET = "zapret_preset"
     private const val KEY_ZAPRET_CACHE_NETWORK = "zapret_cache_network"
     private const val KEY_ZAPRET_CACHE_PRESET = "zapret_cache_preset"
@@ -106,6 +108,7 @@ object XrayPreferences {
     private val dynamicColorKey = booleanPreferencesKey(KEY_DYNAMIC_COLOR)
     private val advancedModeKey = booleanPreferencesKey(KEY_ADVANCED_MODE)
     private val vpnBackendKey = stringPreferencesKey(KEY_VPN_BACKEND)
+    private val allowIpv6BypassKey = booleanPreferencesKey(KEY_ALLOW_IPV6_BYPASS)
     private val zapretPresetKey = stringPreferencesKey(KEY_ZAPRET_PRESET)
     private val zapretCustomArgumentsKey = stringPreferencesKey(KEY_ZAPRET_CUSTOM_ARGUMENTS)
     private val telegramCfEnabledKey = booleanPreferencesKey(KEY_TELEGRAM_CF_ENABLED)
@@ -141,6 +144,7 @@ object XrayPreferences {
             dynamicColor = preferences[dynamicColorKey] ?: true,
             advancedModeEnabled = preferences[advancedModeKey] ?: false,
             vpnBackend = VpnBackend.fromStoredName(preferences[vpnBackendKey]),
+            allowIpv6Bypass = preferences[allowIpv6BypassKey] ?: false,
             zapretPreset = ZapretPreset.fromName(preferences[zapretPresetKey]),
             zapretCustomArguments = preferences[zapretCustomArgumentsKey].orEmpty(),
             telegramCfEnabled = preferences[telegramCfEnabledKey] ?: true,
@@ -184,6 +188,10 @@ object XrayPreferences {
     suspend fun saveVpnBackend(context: Context, backend: VpnBackend) {
         dataStore(context).edit { it[vpnBackendKey] = backend.name }
         VpnRuntimeState.requestTileRefresh(context)
+    }
+
+    suspend fun saveAllowIpv6Bypass(context: Context, enabled: Boolean) {
+        dataStore(context).edit { it[allowIpv6BypassKey] = enabled }
     }
 
     suspend fun saveZapretPreset(context: Context, preset: ZapretPreset) {

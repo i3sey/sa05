@@ -1,21 +1,25 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# SA05 keep rules.
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# The native executables (xray, ByeDPI, tun2socks) are launched with ProcessBuilder and are
+# invisible to R8, so they need no rules. Everything below covers code that is reached by
+# reflection and would otherwise be renamed or stripped.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# --- JNA ---------------------------------------------------------------------
+# JNA resolves native symbols by the *method name* of the mapped interface, so both the
+# library classes and every mapped interface must keep their names and members. Losing this
+# breaks TG WS Proxy at runtime with an UnsatisfiedLinkError that no unit test would catch.
+-keep class com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.** { *; }
+-keep interface com.sun.jna.Library { *; }
+-keep class * implements com.sun.jna.Library { *; }
+-keepclassmembers interface * extends com.sun.jna.Library { <methods>; }
+-dontwarn java.awt.**
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# --- WorkManager -------------------------------------------------------------
+# Workers are instantiated reflectively from their class name.
+-keep class * extends androidx.work.ListenableWorker { <init>(...); }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# --- Diagnostics -------------------------------------------------------------
+# Keep crash lines useful; the original source file name itself is not interesting.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

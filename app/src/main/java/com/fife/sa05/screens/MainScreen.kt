@@ -1,24 +1,27 @@
 package com.fife.sa05.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -34,29 +37,46 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.fife.sa05.AppUpdateState
+import com.fife.sa05.R
+import com.fife.sa05.componentTrouble
 import com.fife.sa05.ConnectionCheckState
+import com.fife.sa05.formatBytes
+import com.fife.sa05.formatUptime
+import com.fife.sa05.VpnTraffic
 import com.fife.sa05.SubscriptionProfile
 import com.fife.sa05.SubscriptionState
 import com.fife.sa05.TelegramProxyRunStatus
 import com.fife.sa05.TelegramProxyRuntimeSnapshot
+import com.fife.sa05.VpnComponentSnapshot
+import com.fife.sa05.VpnComponentState
 import com.fife.sa05.VpnPrimaryAction
 import com.fife.sa05.VpnRunStatus
 import com.fife.sa05.VpnRuntimeSnapshot
 import com.fife.sa05.VpnSecondaryAction
+import com.fife.sa05.VpnStatusPresentation
 import com.fife.sa05.vpnStatusPresentation
 import com.fife.sa05.components.DashboardRow
+import com.fife.sa05.components.FlagBadge
 import com.fife.sa05.parseServerRemark
+import com.fife.sa05.ProfileExplainer
+import com.fife.sa05.ProfilePing
+import kotlinx.coroutines.delay
 import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.motionEnabled
 import com.fife.sa05.ui.theme.pressScale
@@ -97,7 +117,13 @@ internal fun ColumnScope.MainScreen(
     connectionCheck: ConnectionCheckState,
     telegramRuntime: TelegramProxyRuntimeSnapshot,
     updateState: AppUpdateState,
+    traffic: VpnTraffic,
+    advancedModeEnabled: Boolean,
+    pings: Map<String, ProfilePing>,
+    refreshing: Boolean,
+    onRefreshSubscription: () -> Unit,
     onSelectProfile: (String) -> Unit,
+    onPingProfile: (SubscriptionProfile) -> Unit,
     onToggleVpn: () -> Unit,
     onStartTelegram: () -> Unit,
     onStopTelegram: () -> Unit,
@@ -111,6 +137,7 @@ internal fun ColumnScope.MainScreen(
 ) {
     val presentation = remember(vpnRuntime) { vpnStatusPresentation(vpnRuntime) }
     var profileSheetVisible by remember { mutableStateOf(false) }
+    var expandedProfileId by remember { mutableStateOf<String?>(null) }
     val profileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     if (profileSheetVisible) {
@@ -128,16 +155,27 @@ internal fun ColumnScope.MainScreen(
                     ProfileChoice(
                         profile = profile,
                         selected = profile.id == subscription.activeProfile?.id,
+                        expanded = expandedProfileId == profile.id,
+                        ping = pings[profile.id],
                         onClick = {
                             onSelectProfile(profile.id)
                             profileSheetVisible = false
-                        }
+                        },
+                        onToggleDetails = {
+                            expandedProfileId = profile.id.takeIf { it != expandedProfileId }
+                        },
+                        onPing = { onPingProfile(profile) }
                     )
                 }
             }
         }
     }
 
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefreshSubscription,
+        modifier = Modifier.fillMaxSize()
+    ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -163,7 +201,7 @@ internal fun ColumnScope.MainScreen(
                 },
                 actions = {
                     IconButton(onClick = onSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Настройки")
+                        Icon(painterResource(R.drawable.ic_settings), contentDescription = "Настройки")
                     }
                 }
             )
@@ -171,12 +209,15 @@ internal fun ColumnScope.MainScreen(
         item {
             VpnStatusCard(
                 runtime = vpnRuntime,
-                primaryAction = presentation.primaryAction,
-                title = presentation.title,
+                presentation = presentation,
                 description = connectionCheck.pingText() ?: presentation.description,
+                traffic = traffic,
+                advancedModeEnabled = advancedModeEnabled,
                 onToggleVpn = onToggleVpn,
                 onOpenSubscriptionSettings = onOpenSubscriptionSettings,
-                onOpenNetworkSettings = onOpenNetworkSettings
+                onOpenNetworkSettings = onOpenNetworkSettings,
+                onChangeProfile = { profileSheetVisible = true },
+                onDiagnostics = onDiagnostics
             )
         }
         if (updateState is AppUpdateState.Available) {
@@ -190,10 +231,13 @@ internal fun ColumnScope.MainScreen(
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
+                    val activeRemark = parseServerRemark(
+                        subscription.activeProfile?.remarks.orEmpty()
+                    )
                     DashboardRow(
                         title = "Сервер",
-                        subtitle = parseServerRemark(subscription.activeProfile?.remarks.orEmpty())
-                            .name.ifBlank { "Сервер не выбран" },
+                        subtitle = activeRemark.name.ifBlank { "Сервер не выбран" },
+                        trailingFlag = activeRemark.flag,
                         onClick = { profileSheetVisible = true }
                     )
                     androidx.compose.material3.HorizontalDivider(
@@ -237,6 +281,7 @@ internal fun ColumnScope.MainScreen(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -255,7 +300,7 @@ private fun UpdateBanner(versionName: String, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(Icons.Default.CheckCircle, contentDescription = null)
+            Icon(painterResource(R.drawable.ic_check_circle), contentDescription = null)
             Column(Modifier.weight(1f)) {
                 Text("Доступно обновление", style = MaterialTheme.typography.titleMedium)
                 Text("Версия $versionName готова к установке")
@@ -269,38 +314,79 @@ private fun UpdateBanner(versionName: String, onClick: () -> Unit) {
 private fun ProfileChoice(
     profile: SubscriptionProfile,
     selected: Boolean,
-    onClick: () -> Unit
+    expanded: Boolean,
+    ping: ProfilePing?,
+    onClick: () -> Unit,
+    onToggleDetails: () -> Unit,
+    onPing: () -> Unit
 ) {
     val remark = parseServerRemark(profile.remarks)
-    ListItem(
-        headlineContent = { Text(remark.name.ifBlank { "Сервер" }) },
-        supportingContent = {
-            Text(if (selected) "Выбран" else profile.remarks)
-        },
-        leadingContent = {
-            if (selected) Icon(Icons.Default.CheckCircle, contentDescription = null)
-        },
-        modifier = Modifier.clickable(onClick = onClick),
-        colors = androidx.compose.material3.ListItemDefaults.colors(
-            containerColor = if (selected) {
-                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
-            } else {
-                Color.Transparent
-            }
+    Column {
+        ListItem(
+            headlineContent = { Text(remark.name.ifBlank { "Сервер" }) },
+            supportingContent = {
+                Text(ping.label() ?: if (selected) "Выбран" else profile.remarks)
+            },
+            leadingContent = {
+                if (selected) Icon(painterResource(R.drawable.ic_check_circle), contentDescription = null)
+            },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    remark.flag?.let { FlagBadge(it) }
+                    TextButton(onClick = onToggleDetails) {
+                        Text(if (expanded) "Скрыть" else "Подробнее")
+                    }
+                }
+            },
+            modifier = Modifier.clickable(onClick = onClick),
+            colors = androidx.compose.material3.ListItemDefaults.colors(
+                containerColor = if (selected) {
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                } else {
+                    Color.Transparent
+                }
+            )
         )
-    )
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                ProfileExplainer(profile)
+                OutlinedButton(
+                    onClick = onPing,
+                    enabled = ping !is ProfilePing.Running,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (ping is ProfilePing.Running) "Измеряем…" else "Измерить задержку")
+                }
+            }
+        }
+    }
+}
+
+private fun ProfilePing?.label(): String? = when (this) {
+    null -> null
+    ProfilePing.Running -> "Измеряем задержку…"
+    is ProfilePing.Success -> "Задержка: $delayMs мс"
+    is ProfilePing.Failure -> "Не отвечает: $message"
 }
 
 @Composable
 private fun VpnStatusCard(
     runtime: VpnRuntimeSnapshot,
-    primaryAction: VpnPrimaryAction,
-    title: String,
+    presentation: VpnStatusPresentation,
     description: String,
+    traffic: VpnTraffic,
+    advancedModeEnabled: Boolean,
     onToggleVpn: () -> Unit,
     onOpenSubscriptionSettings: () -> Unit,
-    onOpenNetworkSettings: () -> Unit
+    onOpenNetworkSettings: () -> Unit,
+    onChangeProfile: () -> Unit,
+    onDiagnostics: () -> Unit
 ) {
+    val primaryAction = presentation.primaryAction
+    val title = presentation.title
     val container = when (runtime.status) {
         VpnRunStatus.CONNECTED -> MaterialTheme.colorScheme.primaryContainer
         VpnRunStatus.ERROR -> MaterialTheme.colorScheme.errorContainer
@@ -330,9 +416,9 @@ private fun VpnStatusCard(
                 } else {
                     Icon(
                         if (runtime.status == VpnRunStatus.CONNECTED) {
-                            Icons.Default.CheckCircle
+                            painterResource(R.drawable.ic_check_circle)
                         } else {
-                            Icons.Default.PowerSettingsNew
+                            painterResource(R.drawable.ic_power)
                         },
                         contentDescription = null,
                         tint = content
@@ -341,11 +427,38 @@ private fun VpnStatusCard(
                 Column(Modifier.weight(1f)) {
                     Text(title, style = MaterialTheme.typography.headlineSmall, color = content)
                     Text(description, style = MaterialTheme.typography.bodyMedium, color = content)
+                    if (runtime.status == VpnRunStatus.CONNECTED &&
+                        runtime.connectedAtMillis > 0L
+                    ) {
+                        VpnUptime(
+                            connectedAtMillis = runtime.connectedAtMillis,
+                            traffic = traffic,
+                            color = content
+                        )
+                    }
                 }
             }
+            componentTrouble(runtime.components)?.let { trouble ->
+                Text(trouble, style = MaterialTheme.typography.bodyMedium, color = content)
+            }
+            if (advancedModeEnabled && runtime.components.isNotEmpty()) {
+                ComponentChips(runtime.components)
+            }
             val interaction = remember { MutableInteractionSource() }
+            val haptics = LocalHapticFeedback.current
+            // Reaching a terminal state is worth a nudge; intermediate ticks are not.
+            LaunchedEffect(runtime.status) {
+                when (runtime.status) {
+                    VpnRunStatus.CONNECTED ->
+                        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    VpnRunStatus.ERROR ->
+                        haptics.performHapticFeedback(HapticFeedbackType.Reject)
+                    else -> Unit
+                }
+            }
             Button(
                 onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
                     if (primaryAction == VpnPrimaryAction.OPEN_SUBSCRIPTION) {
                         onOpenSubscriptionSettings()
                     } else {
@@ -371,11 +484,74 @@ private fun VpnStatusCard(
                     )
                 }
             }
-            if (runtime.status == VpnRunStatus.WAITING_FOR_NETWORK) {
-                OutlinedButton(onClick = onOpenNetworkSettings, modifier = Modifier.fillMaxWidth()) {
-                    Text("Настройки сети")
+            presentation.secondaryActions.forEach { action ->
+                OutlinedButton(
+                    onClick = when (action) {
+                        VpnSecondaryAction.NETWORK_SETTINGS -> onOpenNetworkSettings
+                        VpnSecondaryAction.CHANGE_PROFILE,
+                        VpnSecondaryAction.CHANGE_STRATEGY -> onChangeProfile
+                        VpnSecondaryAction.DIAGNOSTICS -> onDiagnostics
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        when (action) {
+                            VpnSecondaryAction.NETWORK_SETTINGS -> "Настройки сети"
+                            VpnSecondaryAction.CHANGE_PROFILE -> "Выбрать другой сервер"
+                            VpnSecondaryAction.CHANGE_STRATEGY -> "Сменить стратегию обхода"
+                            VpnSecondaryAction.DIAGNOSTICS -> "Открыть проверку"
+                        }
+                    )
                 }
             }
+        }
+    }
+}
+
+/** Ticks once a second so the connected time stays honest without any service-side work. */
+@Composable
+private fun VpnUptime(connectedAtMillis: Long, traffic: VpnTraffic, color: Color) {
+    var now by remember(connectedAtMillis) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(connectedAtMillis) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    Text(
+        "На связи ${formatUptime(now - connectedAtMillis)} · " +
+            "↓ ${formatBytes(traffic.rxBytes)} ↑ ${formatBytes(traffic.txBytes)}",
+        style = MaterialTheme.typography.bodySmall,
+        color = color
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ComponentChips(components: List<VpnComponentSnapshot>) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        components.forEach { snapshot ->
+            val tint = when (snapshot.state) {
+                VpnComponentState.RUNNING -> MaterialTheme.colorScheme.primary
+                VpnComponentState.FALLBACK -> MaterialTheme.colorScheme.tertiary
+                VpnComponentState.FAILED -> MaterialTheme.colorScheme.error
+                VpnComponentState.STARTING -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            AssistChip(
+                onClick = {},
+                enabled = false,
+                label = { Text(snapshot.component.title) },
+                leadingIcon = {
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .background(tint, CircleShape)
+                    )
+                },
+                colors = AssistChipDefaults.assistChipColors(
+                    disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            )
         }
     }
 }

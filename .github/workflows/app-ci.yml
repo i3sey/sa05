@@ -40,3 +40,14 @@ jobs:
 
       - name: Verify APK 16 KB compatibility
         run: scripts/check-16kb-compat.sh app/build/outputs/apk/dev/app-dev.apk
+
+      # R8 is on for release only, so a minified build is the only place keep-rule
+      # regressions can surface before a user hits them.
+      - name: Build minified release
+        run: ./gradlew assembleRelease
+
+      - name: Verify R8 kept the JNA bindings
+        run: app/scripts/check-r8-keeps.sh app/build/outputs/apk/release/app-release.apk
+
+      - name: Verify release APK 16 KB compatibility
+        run: scripts/check-16kb-compat.sh app/build/outputs/apk/release/app-release.apk

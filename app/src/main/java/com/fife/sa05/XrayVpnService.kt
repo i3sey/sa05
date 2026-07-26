@@ -55,6 +55,8 @@ class XrayVpnService : VpnService() {
         private const val PROCESS_MONITOR_MS = 3_000L
         private val _socksPort = MutableStateFlow<Int?>(null)
         val socksPort = _socksPort.asStateFlow()
+        private val _traffic = MutableStateFlow(VpnTraffic())
+        val traffic = _traffic.asStateFlow()
         private val _zapretAutoProgress = MutableStateFlow(ZapretAutoProgress())
         val zapretAutoProgress = _zapretAutoProgress.asStateFlow()
         @Volatile private var verificationMessage = ""
@@ -79,12 +81,18 @@ class XrayVpnService : VpnService() {
     private var fullAutoOptimizationJob: Job? = null
     private var networkRecoveryJob: Job? = null
     private var processMonitorJob: Job? = null
-    private var tun: ParcelFileDescriptor? = null
+    private val tunController by lazy { TunController({ Builder() }, packageName) }
     private var proxyProcess: Process? = null
     private var auxiliaryProcess: Process? = null
     private var bridgeProcess: Process? = null
     private var tun2socksProcess: Process? = null
     private var xrayRuntime = XrayRuntime.STOPPED
+    private val supervisor = ProcessSupervisor()
+    private val trafficCounter = UidTrafficCounter()
+    /** Preset the currently running ByeDPI process was started with, for targeted restarts. */
+    private var runningZapretPreset: ZapretPreset? = null
+    /** SOCKS port the currently running tun2socks was pointed at, for targeted restarts. */
+    private var tun2socksPort: Int? = null
     private var runningBackend = VpnBackend.PROXY_ONLY
     private var runningSettings = XraySettings(config = XrayPreferences.defaultConfig)
     private var runningProfile: SubscriptionProfile? = null
@@ -215,11 +223,12 @@ class XrayVpnService : VpnService() {
                 check(generation == startGeneration.get()) { "Запуск отменён" }
                 _socksPort.value = backend.socksPort
                 if (!backend.tunnelReady) {
-                    tun = createTun()
-                    startTun2socks(tun!!, backend.socksPort)
+                    startTun2socks(createTun(), backend.socksPort)
                 }
                 check(generation == startGeneration.get()) { "Запуск отменён" }
                 activeNetworkKey = currentNetwork()?.key
+                trafficCounter.start()
+                _traffic.value = VpnTraffic()
                 publishRuntime(
                     status = VpnRunStatus.CONNECTED,
                     message = "Маршрут запущен",
@@ -496,8 +505,7 @@ class XrayVpnService : VpnService() {
         pipeLogs("ByeDPI", proxyProcess!!)
         waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 3_000)
         startZapretBridge()
-        tun = createTun()
-        startTun2socks(tun!!, ZAPRET_BRIDGE_PORT)
+        startTun2socks(createTun(), ZAPRET_BRIDGE_PORT)
     }
 
     private suspend fun startFullAutoBackend(): BackendStart {
@@ -682,7 +690,7 @@ class XrayVpnService : VpnService() {
                 resolveForSocks = runningBackend == VpnBackend.LOCAL_BYPASS,
                 targetsToTest = ConnectivityDiagnostics.autoTargets
             )
-            val tunnelAlive = isProcessAlive(tun2socksProcess) && tun != null
+            val tunnelAlive = isProcessAlive(tun2socksProcess) && tunController.established
             val pingMs = results.firstOrNull {
                 it.reachable && it.target.group == DiagnosticGroup.CONTROL
             }?.delayMs
@@ -708,6 +716,7 @@ class XrayVpnService : VpnService() {
     private fun createZapretProcess(preset: ZapretPreset): Process {
         val binary = File(applicationInfo.nativeLibraryDir, "libciadpi.so")
         check(binary.exists()) { "ByeDPI не найден" }
+        runningZapretPreset = preset
         return ProcessBuilder(
             ZapretCommand.build(
                 binary.absolutePath,
@@ -893,16 +902,14 @@ class XrayVpnService : VpnService() {
                     continue
                 }
                 if (!requiredProcessesRunning()) {
-                    publishRuntime(
-                        status = VpnRunStatus.RECOVERING,
-                        message = "Один из компонентов VPN остановился",
-                        failureKind = VpnFailureKind.BACKEND,
-                        connectedAtMillis = runtime.connectedAtMillis,
-                        components = componentSnapshots(failed = true)
-                    )
-                    startForegroundNow("Восстановление VPN")
-                    beginStart(recoveryAttempt = 1)
-                    return@launch
+                    if (!recoverDeadProcesses(runtime)) return@launch
+                    continue
+                }
+                supervisedRoles(runningBackend, xrayRuntime).forEach(supervisor::noteHealthy)
+                val traffic = trafficCounter.sinceStart()
+                if (traffic != _traffic.value) {
+                    _traffic.value = traffic
+                    startForegroundNow(STATE_CONNECTED)
                 }
                 val components = componentSnapshots()
                 if (components != runtime.components) {
@@ -917,12 +924,121 @@ class XrayVpnService : VpnService() {
         }
     }
 
+    private fun roleProcess(role: SupervisedRole): Process? = when (role) {
+        SupervisedRole.XRAY -> proxyProcess
+        SupervisedRole.TUN2SOCKS -> tun2socksProcess
+        SupervisedRole.BRIDGE -> bridgeProcess
+        SupervisedRole.BYEDPI -> when (runningBackend) {
+            // Local Bypass runs ByeDPI as the primary process; Full Auto runs it beside Xray.
+            VpnBackend.LOCAL_BYPASS -> proxyProcess
+            else -> auxiliaryProcess
+        }
+    }
+
+    private fun deadSupervisedRoles(): List<SupervisedRole> =
+        supervisedRoles(runningBackend, xrayRuntime)
+            .filterNot { isProcessAlive(roleProcess(it)) }
+
+    /**
+     * Restarts just the processes that died, newest failure first, instead of tearing the whole
+     * stack down. Returns false when the caller must stop monitoring because a full restart was
+     * triggered instead.
+     */
+    private suspend fun recoverDeadProcesses(runtime: VpnRuntimeSnapshot): Boolean {
+        // A lost TUN or a stopped Telegram Proxy cannot be respawned in isolation — those
+        // belong to the full start path.
+        val dead = deadSupervisedRoles()
+        if (!tunController.established || dead.isEmpty()) {
+            return fullRestart(runtime, "Один из компонентов VPN остановился")
+        }
+        val role = dead.first()
+        val backoff = supervisor.nextBackoffMs(role)
+            ?: return fullRestart(
+                runtime,
+                "${role.title} не удержался после ${ProcessRestartPolicy.MAX_ATTEMPTS} попыток"
+            )
+        publishRuntime(
+            status = VpnRunStatus.RECOVERING,
+            message = "Перезапускаем ${role.title}",
+            failureKind = VpnFailureKind.BACKEND,
+            connectedAtMillis = runtime.connectedAtMillis,
+            components = componentSnapshots()
+        )
+        delay(backoff)
+        val cascade = restartCascade(runningBackend, xrayRuntime, role)
+        val restarted = runCatching { cascade.forEach { restartRole(it) } }
+        if (restarted.isFailure) {
+            Log.w("XrayVpnService", "Targeted restart of ${role.name} failed", restarted.exceptionOrNull())
+            return fullRestart(runtime, "Не удалось перезапустить ${role.title}")
+        }
+        publishRuntime(
+            status = VpnRunStatus.CONNECTED,
+            message = runtime.message,
+            connectedAtMillis = runtime.connectedAtMillis,
+            components = componentSnapshots()
+        )
+        startForegroundNow(STATE_CONNECTED)
+        return true
+    }
+
+    private fun fullRestart(runtime: VpnRuntimeSnapshot, message: String): Boolean {
+        supervisor.reset()
+        publishRuntime(
+            status = VpnRunStatus.RECOVERING,
+            message = message,
+            failureKind = VpnFailureKind.BACKEND,
+            connectedAtMillis = runtime.connectedAtMillis,
+            components = componentSnapshots(failed = true)
+        )
+        startForegroundNow("Восстановление VPN")
+        beginStart(recoveryAttempt = 1)
+        return false
+    }
+
+    private suspend fun restartRole(role: SupervisedRole) {
+        when (role) {
+            SupervisedRole.XRAY -> {
+                val fullAuto = xrayRuntime == XrayRuntime.FULL_AUTO_YOUTUBE
+                closeProcess(proxyProcess)
+                proxyProcess = null
+                xrayRuntime = XrayRuntime.STOPPED
+                startXrayBackend(fullAuto = fullAuto)
+            }
+            SupervisedRole.BYEDPI -> {
+                val preset = runningZapretPreset ?: error("Пресет ByeDPI неизвестен")
+                if (runningBackend == VpnBackend.LOCAL_BYPASS) {
+                    closeProcess(proxyProcess)
+                    proxyProcess = createZapretProcess(preset)
+                    pipeLogs("ByeDPI", proxyProcess!!)
+                    waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 5_000)
+                } else {
+                    closeProcess(auxiliaryProcess)
+                    auxiliaryProcess = createZapretProcess(preset)
+                    pipeLogs("ByeDPI", auxiliaryProcess!!)
+                    waitForPort(auxiliaryProcess!!, ZAPRET_SOCKS_PORT, 5_000)
+                }
+            }
+            SupervisedRole.BRIDGE -> {
+                closeProcess(bridgeProcess)
+                bridgeProcess = null
+                startZapretBridge()
+            }
+            SupervisedRole.TUN2SOCKS -> {
+                val port = tun2socksPort ?: error("SOCKS-порт tun2socks неизвестен")
+                val fd = tunController.descriptorOrNull ?: error("TUN закрыт")
+                closeProcess(tun2socksProcess)
+                tun2socksProcess = null
+                startTun2socks(fd, port)
+            }
+        }
+    }
+
     private fun requiredProcessesRunning(): Boolean {
         return requiredProcessesRunning(
             backend = runningBackend,
             xrayRuntime = xrayRuntime,
             health = VpnProcessHealth(
-                tun = tun != null,
+                tun = tunController.established,
                 tun2socks = isProcessAlive(tun2socksProcess),
                 proxy = isProcessAlive(proxyProcess),
                 bridge = isProcessAlive(bridgeProcess),
@@ -947,7 +1063,7 @@ class XrayVpnService : VpnService() {
                 else -> isProcessAlive(proxyProcess)
             }
             add(VpnComponentSnapshot(VpnRuntimeComponent.XRAY, state(xrayRunning)))
-            add(VpnComponentSnapshot(VpnRuntimeComponent.TUN, state(tun != null)))
+            add(VpnComponentSnapshot(VpnRuntimeComponent.TUN, state(tunController.established)))
             add(
                 VpnComponentSnapshot(
                     VpnRuntimeComponent.TUN2SOCKS,
@@ -1017,30 +1133,16 @@ class XrayVpnService : VpnService() {
 
     private fun networkKey(): String = currentNetwork()?.key.orEmpty()
 
-    private fun createTun(): ParcelFileDescriptor {
-        val builder = Builder()
-            .setSession("SA05 ${runningBackend.title}")
-            .setMtu(1500)
-            .addAddress("10.10.10.1", 30)
-            .addRoute("0.0.0.0", 0)
-            .addDnsServer("1.1.1.1")
-            .setBlocking(false)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
-        builder.addDisallowedApplication(packageName)
-        runningSettings.excludedApps.forEach { pkg ->
-            try {
-                builder.addDisallowedApplication(pkg)
-            } catch (e: Exception) {
-                Log.w("XrayVpnService", "Cannot exclude $pkg", e)
-            }
-        }
-        return builder.establish() ?: error("Android не создал TUN-интерфейс")
-    }
+    private fun createTun(): ParcelFileDescriptor = tunController.establish(
+        session = "SA05 ${runningBackend.title}",
+        allowIpv6Bypass = runningSettings.allowIpv6Bypass,
+        excludedApps = runningSettings.excludedApps
+    )
 
     private suspend fun startTun2socks(fd: ParcelFileDescriptor, socksPort: Int) {
         val binary = File(applicationInfo.nativeLibraryDir, "libtun2socks.so")
         check(binary.exists()) { "libtun2socks.so не найден" }
+        tun2socksPort = socksPort
         val socketFile = File(filesDir, "tun2socks.sock")
         socketFile.delete()
         tun2socksProcess = ProcessBuilder(
@@ -1188,8 +1290,12 @@ class XrayVpnService : VpnService() {
         xrayRuntime = XrayRuntime.STOPPED
         closeProcess(auxiliaryProcess)
         auxiliaryProcess = null
-        runCatching { tun?.close() }
-        tun = null
+        runningZapretPreset = null
+        tun2socksPort = null
+        supervisor.reset()
+        trafficCounter.reset()
+        _traffic.value = VpnTraffic()
+        tunController.close()
     }
 
     private fun selectedLabel(): String = when (runningBackend) {
@@ -1325,9 +1431,18 @@ class XrayVpnService : VpnService() {
             .setContentText(
                 vpnNotificationContentText(
                     runningProfileName = runtime.profileName,
-                    fallbackProfileName = runningLabel.ifBlank { selectedLabel() }
+                    fallbackProfileName = runningLabel.ifBlank { selectedLabel() },
+                    traffic = _traffic.value
                 )
             )
+            .apply {
+                // The system ticks the chronometer itself, so uptime stays live without the
+                // service waking up for it.
+                val connected = runtime.status == VpnRunStatus.CONNECTED &&
+                    runtime.connectedAtMillis > 0L
+                setUsesChronometer(connected)
+                if (connected) setWhen(runtime.connectedAtMillis) else setShowWhen(false)
+            }
             .setSubText(runtime.message.ifBlank { "SA05 ${runningBackend.title}" })
             .setContentIntent(openApp)
             .addAction(0, "Отключить", stopIntent)

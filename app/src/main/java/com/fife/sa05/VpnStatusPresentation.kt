@@ -21,6 +21,35 @@ data class VpnStatusPresentation(
     val secondaryActions: List<VpnSecondaryAction>
 )
 
+/**
+ * Plain-language note for a component that is degraded or dead, so a broken piece of the stack
+ * is visible without making the user read "tun2socks". Returns null while everything is fine —
+ * healthy components are not worth screen space.
+ */
+internal fun componentTrouble(components: List<VpnComponentSnapshot>): String? {
+    val byComponent = components.associateBy { it.component }
+    fun state(component: VpnRuntimeComponent) = byComponent[component]?.state
+
+    if (state(VpnRuntimeComponent.BYEDPI) == VpnComponentState.FALLBACK) {
+        return "Локальный обход не взлетел: YouTube идёт через выбранный сервер"
+    }
+    val failed = components.filter { it.state == VpnComponentState.FAILED }
+    if (failed.isEmpty()) return null
+    return when {
+        failed.any { it.component == VpnRuntimeComponent.TUN } ->
+            "Туннель закрылся, перезапускаем VPN"
+        failed.any { it.component == VpnRuntimeComponent.TUN2SOCKS } ->
+            "Перенос трафика в туннель остановился, восстанавливаем"
+        failed.any { it.component == VpnRuntimeComponent.XRAY } ->
+            "Соединение с сервером оборвалось, восстанавливаем"
+        failed.any { it.component == VpnRuntimeComponent.BYEDPI } ->
+            "Локальный обход остановился, восстанавливаем"
+        failed.any { it.component == VpnRuntimeComponent.TELEGRAM } ->
+            "Telegram Proxy остановился"
+        else -> "Один из компонентов VPN остановился"
+    }
+}
+
 fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
     val profileDescription = snapshot.profileName.ifBlank { snapshot.backend.title }
     return when (snapshot.status) {

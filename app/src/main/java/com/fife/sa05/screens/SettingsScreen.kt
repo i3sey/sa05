@@ -1,7 +1,10 @@
 package com.fife.sa05.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,11 +36,18 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.core.graphics.drawable.toBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.fife.sa05.AppRelease
@@ -48,6 +58,7 @@ import com.fife.sa05.components.DashboardRow
 import com.fife.sa05.components.SectionTitle
 import com.fife.sa05.InstalledApp
 import com.fife.sa05.R
+import com.fife.sa05.StrategyExplainer
 import com.fife.sa05.SubscriptionState
 import com.fife.sa05.ui.theme.clickableScale
 import com.fife.sa05.ui.theme.fadeTransform
@@ -253,11 +264,13 @@ internal fun ColumnScope.AdvancedSettingsScreen(
     selectedBackend: VpnBackend,
     zapretPreset: ZapretPreset,
     customZapretArguments: String,
+    allowIpv6Bypass: Boolean,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
     onBack: () -> Unit,
     onSelectBackend: (VpnBackend) -> Unit,
     onSelectZapretPreset: (ZapretPreset) -> Unit,
+    onAllowIpv6BypassChanged: (Boolean) -> Unit,
     onHosts: () -> Unit,
     onCustomZapretArgumentsChanged: (String) -> Unit,
     onSaveCustomZapretArguments: () -> Unit,
@@ -294,16 +307,35 @@ internal fun ColumnScope.AdvancedSettingsScreen(
             onDismissRequest = { presetPickerVisible = false },
             title = { Text("Стратегия ByeDPI") },
             text = {
+                var explainedPreset by remember { mutableStateOf(zapretPreset) }
                 LazyColumn(modifier = Modifier.fillMaxWidth()) {
                     items(ZapretPreset.selectable, key = { it.name }) { preset ->
-                        TextButton(
-                            onClick = {
-                                onSelectZapretPreset(preset)
-                                presetPickerVisible = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(preset.title, modifier = Modifier.fillMaxWidth())
+                        Column(Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        onSelectZapretPreset(preset)
+                                        presetPickerVisible = false
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(preset.title, modifier = Modifier.fillMaxWidth())
+                                }
+                                TextButton(
+                                    onClick = {
+                                        explainedPreset = preset.takeIf { it != explainedPreset }
+                                            ?: zapretPreset
+                                    }
+                                ) {
+                                    Text(if (explainedPreset == preset) "Скрыть" else "Что это")
+                                }
+                            }
+                            AnimatedVisibility(visible = explainedPreset == preset) {
+                                StrategyExplainer(preset, Modifier.padding(bottom = 8.dp))
+                            }
                         }
                     }
                 }
@@ -339,6 +371,44 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                             title = "Хосты",
                             subtitle = "Проверка outbound-подключений",
                             onClick = onHosts
+                        )
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Пропускать IPv6 мимо VPN",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                if (allowIpv6Bypass) {
+                                    "IPv6 идёт напрямую: реальный адрес виден сайтам, " +
+                                        "блокировки по IPv6 не обходятся. Включайте только " +
+                                        "если без этого сеть не работает."
+                                } else {
+                                    "IPv6 закрыт туннелем, приложения переходят на IPv4. " +
+                                        "Включите, если у оператора сеть только на IPv6."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (allowIpv6Bypass) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                        Switch(
+                            checked = allowIpv6Bypass,
+                            onCheckedChange = onAllowIpv6BypassChanged
                         )
                     }
                 }
@@ -505,6 +575,36 @@ internal fun HostPingList(
     }
 }
 
+/**
+ * Loads one launcher icon off the main thread. Only rows the user actually scrolls to pay for it,
+ * because `LazyColumn` composes them on demand.
+ */
+@Composable
+private fun AppIcon(packageName: String) {
+    val context = LocalContext.current
+    val icon by produceState<ImageBitmap?>(initialValue = null, packageName) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.packageManager.getApplicationIcon(packageName)
+                    .toBitmap(width = ICON_PX, height = ICON_PX)
+                    .asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 10.dp)
+            .size(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        icon?.let {
+            Image(bitmap = it, contentDescription = null, modifier = Modifier.size(32.dp))
+        }
+    }
+}
+
+private const val ICON_PX = 96
+
 @Composable
 internal fun AppExclusionList(
     apps: List<InstalledApp>,
@@ -573,6 +673,7 @@ internal fun AppExclusionList(
                         checked = app.packageName in selected,
                         onCheckedChange = null
                     )
+                    AppIcon(app.packageName)
                     Column {
                         Text(app.label)
                         SelectionContainer {
