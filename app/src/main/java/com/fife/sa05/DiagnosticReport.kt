@@ -16,7 +16,18 @@ internal object ReportRedaction {
     private val hexSecret = Regex("\\b[0-9a-fA-F]{32,}\\b")
     private val url = Regex("""\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>]+""")
     private val ipv4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
-    private val ipv6 = Regex("""\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b""")
+    /**
+     * Either a compressed form containing `::`, or the full eight groups.
+     *
+     * A looser "two or more colon-separated groups" pattern also matches clock times, so
+     * `2026/07/26 18:07:35` came out as `2026/07/26 <ip removed>` and the log lost the timeline
+     * that makes it worth reading.
+     */
+    private val ipv6 = Regex(
+        """\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b""" +
+            """|(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{0,4}::""" +
+            """(?:[0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])"""
+    )
     private val email = Regex("""\b[\w.+-]+@[\w-]+\.[\w.-]+\b""")
 
     /**

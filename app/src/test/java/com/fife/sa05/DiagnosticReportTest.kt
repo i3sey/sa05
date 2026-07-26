@@ -51,6 +51,42 @@ class ReportRedactionTest {
     }
 
     @Test
+    fun `keeps clock times readable`() {
+        // A log without timestamps is much harder to reason about, and a naive IPv6 pattern
+        // treats 18:07:35 as an address.
+        val out = redacted("2026/07/26 18:07:35.727304 [Info] core: started")
+
+        assertTrue(out.contains("18:07:35.727304"))
+    }
+
+    @Test
+    fun `keeps host-and-port pairs readable`() {
+        val out = redacted("listening on 127.0.0.1:10808")
+
+        assertTrue(out.contains("127.0.0.1:10808"))
+    }
+
+    @Test
+    fun `still strips full-length IPv6`() {
+        val out = redacted("peer 2001:0db8:0000:0000:0000:0000:0000:0001 up")
+
+        assertFalse(out.contains("2001:0db8"))
+    }
+
+    @Test
+    fun `still strips compressed IPv6 in several shapes`() {
+        listOf(
+            "fe80::1",
+            "2001:db8::dead:beef",
+            "::1",
+            "2001:db8:1234::5678"
+        ).forEach { address ->
+            val out = redacted("dial $address now")
+            assertFalse("leaked $address", out.contains(address))
+        }
+    }
+
+    @Test
     fun `strips e-mail addresses`() {
         val out = redacted("account owner@example.com over quota")
 
