@@ -349,6 +349,10 @@ private fun XrayScreen(
             null
         }
     }
+    // Same rule the service applies, so the screen shows the port that will actually be used.
+    val lanSharePort = remember(preferences.config) {
+        pickLanProxyPort(inboundPorts(preferences.config))
+    }
     val exportStrategies = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -818,12 +822,13 @@ private fun XrayScreen(
                     lanShareUri = lanEndpoint?.let {
                         lanProxyShareUri(
                             address = it.address,
-                            port = LAN_PROXY_PORT,
+                            port = lanSharePort,
                             user = LAN_PROXY_USER,
                             password = preferences.lanSharingPassword
                         )
                     },
                     lanShareAddress = lanEndpoint?.address,
+                    lanSharePort = lanSharePort,
                     lanSharePassword = preferences.lanSharingPassword,
                     onLanSharingChanged = { enabled ->
                         scope.launch {
@@ -845,7 +850,7 @@ private fun XrayScreen(
                         lanEndpoint?.let { endpoint ->
                             val uri = lanProxyShareUri(
                                 address = endpoint.address,
-                                port = LAN_PROXY_PORT,
+                                port = lanSharePort,
                                 user = LAN_PROXY_USER,
                                 password = preferences.lanSharingPassword
                             )

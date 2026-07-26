@@ -379,27 +379,40 @@ class XrayVpnService : VpnService() {
      * right now. The VPN still comes up, just without sharing.
      */
     private fun applyLanSharing(runtimeJson: String): String {
-        if (!runningSettings.lanSharingEnabled) return runtimeJson
+        // Always first, whether or not sharing is on: a provider's 0.0.0.0 inbound is an open
+        // proxy for the whole Wi-Fi, and the authenticated inbound below is the supported way
+        // to let another device in.
+        val hardened = hardenInbounds(runtimeJson)
+        if (hardened.reboundPorts.isNotEmpty()) {
+            Log.i(
+                "LanShare",
+                "Pulled ${hardened.reboundPorts.size} inbound(s) back to loopback: " +
+                    hardened.reboundPorts.joinToString()
+            )
+        }
+        val json = hardened.json
+        if (!runningSettings.lanSharingEnabled) return json
         val password = runningSettings.lanSharingPassword
         if (password.isBlank()) {
             Log.w("LanShare", "Sharing enabled without a password; refusing to open the port")
-            return runtimeJson
+            return json
         }
         val endpoint = lanEndpoints().firstOrNull() ?: run {
             Log.i("LanShare", "No local network address; sharing stays off this session")
-            return runtimeJson
+            return json
         }
+        val port = pickLanProxyPort(inboundPorts(json))
         return runCatching {
             addLanProxyInbound(
-                raw = runtimeJson,
+                raw = json,
                 listenAddress = endpoint.address,
-                port = LAN_PROXY_PORT,
+                port = port,
                 user = LAN_PROXY_USER,
                 password = password
             )
         }.getOrElse {
             Log.w("LanShare", "Could not add the sharing inbound", it)
-            runtimeJson
+            json
         }
     }
 

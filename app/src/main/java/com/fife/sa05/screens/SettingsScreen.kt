@@ -57,7 +57,6 @@ import com.fife.sa05.BuildConfig
 import com.fife.sa05.components.DashboardRow
 import com.fife.sa05.components.QrCode
 import com.fife.sa05.components.SectionTitle
-import com.fife.sa05.LAN_PROXY_PORT
 import com.fife.sa05.LAN_PROXY_USER
 import com.fife.sa05.InstalledApp
 import com.fife.sa05.R
@@ -279,6 +278,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
     lanSharingEnabled: Boolean,
     lanShareUri: String?,
     lanShareAddress: String?,
+    lanSharePort: Int,
     lanSharePassword: String,
     onLanSharingChanged: (Boolean) -> Unit,
     onRotateLanPassword: () -> Unit,
@@ -463,9 +463,11 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         }
                         if (lanSharingEnabled) {
                             Text(
-                                "Порт открыт для всех, кто уже в этой сети. В публичном Wi-Fi " +
-                                    "не включайте. Доступ закрыт паролем, трафик гостей идёт " +
-                                    "через вашу подписку и расходует ваш трафик и батарею.",
+                                "Это единственный вход в туннель из локальной сети, и он " +
+                                    "закрыт паролем. Всё остальное приложение слушает только " +
+                                    "внутри телефона. В публичном Wi-Fi всё равно не включайте: " +
+                                    "трафик гостей идёт через вашу подписку и расходует ваш " +
+                                    "трафик и батарею.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error
                             )
@@ -477,7 +479,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             } else {
-                                Text("Адрес: $lanShareAddress:$LAN_PROXY_PORT")
+                                Text("Адрес: $lanShareAddress:$lanSharePort")
                                 Text("Логин: $LAN_PROXY_USER")
                                 SelectionContainer {
                                     Text(
