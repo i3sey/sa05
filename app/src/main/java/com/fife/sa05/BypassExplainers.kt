@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
@@ -48,17 +50,55 @@ import kotlin.math.roundToInt
  */
 enum class BypassPrimitive(
     val title: String,
-    val summary: String
+    val summary: String,
+    /** Что достаётся DPI провайдера, пока пакет едет к сайту. */
+    val dpiSees: String
 ) {
-    SPLIT("Сегментация", "ClientHello режется на части — DPI не видит SNI целиком"),
-    DISORDER("Реордеринг", "Части уходят не по порядку — DPI не собирает поток, сервер собирает по seq"),
-    FAKE("Фейк-пакет", "Перед реальным летит пакет-приманка, сервер его отбрасывает"),
-    OOB("OOB-байт", "Внеполосный байт ломает разбор потока у DPI"),
-    TTL("Малый TTL", "Приманка с низким TTL гаснет до сервера, но обманывает DPI"),
-    TLSREC("TLS-фрагмент", "SNI разрывается между двумя TLS-записями"),
-    SNI("Фейк-SNI", "DPI видит подставной домен вместо настоящего"),
-    HTTPMOD("HTTP-маскировка", "Регистр и формат заголовка Host меняются — сигнатура не совпадает"),
-    AUTO("Адаптивно", "Приём подбирается по реакции сети: torst, ssl_err, redirect")
+    SPLIT(
+        "Сегментация",
+        "ClientHello режется на части — DPI не видит SNI целиком",
+        "обрывок ClientHello без имени сайта"
+    ),
+    DISORDER(
+        "Реордеринг",
+        "Части уходят не по порядку — DPI не собирает поток, сервер собирает по seq",
+        "куски не в том порядке"
+    ),
+    FAKE(
+        "Фейк-пакет",
+        "Перед реальным летит пакет-приманка, сервер его отбрасывает",
+        "приманку и считает её началом соединения"
+    ),
+    OOB(
+        "OOB-байт",
+        "Внеполосный байт ломает разбор потока у DPI",
+        "лишний байт посреди потока"
+    ),
+    TTL(
+        "Малый TTL",
+        "Приманка с низким TTL гаснет до сервера, но обманывает DPI",
+        "приманку, которая до сайта не доедет"
+    ),
+    TLSREC(
+        "TLS-фрагмент",
+        "SNI разрывается между двумя TLS-записями",
+        "две TLS-записи вместо одной"
+    ),
+    SNI(
+        "Фейк-SNI",
+        "DPI видит подставной домен вместо настоящего",
+        "ya.ru вместо youtube.com"
+    ),
+    HTTPMOD(
+        "HTTP-маскировка",
+        "Регистр и формат заголовка Host меняются — сигнатура не совпадает",
+        "заголовок Host в непривычном виде"
+    ),
+    AUTO(
+        "Адаптивно",
+        "Приём подбирается по реакции сети: torst, ssl_err, redirect",
+        "каждый раз разное — приём меняется по ответу сети"
+    )
 }
 
 /** Какие приёмы задействует стратегия — выводится прямо из её аргументов ByeDPI. */
@@ -124,6 +164,13 @@ fun StrategyExplainer(preset: ZapretPreset, modifier: Modifier = Modifier) {
             )
             return@Column
         }
+        Text(
+            "Приёмы работают на телефоне и применяются к трафику, который идёт мимо сервера " +
+                "подписки — YouTube и то, что открыто в обход.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(10.dp))
         // Чипы приёмов — анимированный вход со сдвигом.
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             primitives.forEachIndexed { index, primitive ->
@@ -189,8 +236,38 @@ private fun PrimitiveCard(primitive: BypassPrimitive) {
                     .fillMaxWidth()
                     .height(64.dp)
             )
+            Spacer(Modifier.height(4.dp))
+            // Без подписей сцена читается как абстракция; с ними видно, кто есть кто.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                EndpointLabel("Телефон", TextAlign.Start, Modifier.weight(1f))
+                EndpointLabel("DPI провайдера", TextAlign.Center, Modifier.weight(1f))
+                EndpointLabel("youtube.com", TextAlign.End, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "DPI видит: ${primitive.dpiSees}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
+}
+
+@Composable
+private fun EndpointLabel(text: String, align: TextAlign, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = align,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -229,6 +306,12 @@ private fun BypassAnimation(primitive: BypassPrimitive, modifier: Modifier = Mod
 // Рисование сцены
 // ---------------------------------------------------------------------------
 
+/** Где стоят телефон и сайт; пакеты ездят между ними, не наезжая на узлы. */
+private const val SCENE_LEFT = 0.06f
+private const val SCENE_RIGHT = 0.94f
+private const val TRAVEL_LEFT = 0.14f
+private const val TRAVEL_RIGHT = 0.86f
+
 private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 private fun smooth(t: Float): Float = (t * t * (3f - 2f * t)).coerceIn(0f, 1f)
 private fun clamp01(t: Float) = t.coerceIn(0f, 1f)
@@ -263,10 +346,10 @@ private fun DrawScope.packet(
     }
 }
 
-/** Провод client→server + ворота DPI по центру. Возвращает x ворот. */
-private fun DrawScope.baseScene(p: BypassPalette, cy: Float): Float {
-    val left = size.width * 0.08f
-    val right = size.width * 0.92f
+/** Телефон слева, сайт справа, DPI провайдера по центру. Возвращает x ворот. */
+private fun DrawScope.baseScene(p: BypassPalette, cy: Float, progress: Float): Float {
+    val left = size.width * SCENE_LEFT
+    val right = size.width * SCENE_RIGHT
     drawLine(
         color = p.wire,
         start = Offset(left, cy),
@@ -287,6 +370,17 @@ private fun DrawScope.baseScene(p: BypassPalette, cy: Float): Float {
         end = Offset(gateX, cy + gateH / 2f),
         strokeWidth = size.height * 0.04f
     )
+    // Луч сканирования: видно, что ворота не декорация, а разбирают то, что мимо них едет.
+    val scanY = cy - gateH / 2f + gateH * ((progress * 2f) % 1f)
+    drawLine(
+        color = p.gate.copy(alpha = 0.45f),
+        start = Offset(gateX - size.height * 0.07f, scanY),
+        end = Offset(gateX + size.height * 0.07f, scanY),
+        strokeWidth = size.height * 0.02f
+    )
+    // Концы провода: слева телефон, справа сайт — подписи под холстом называют их поимённо.
+    drawCircle(color = p.segment, radius = size.height * 0.09f, center = Offset(left, cy))
+    drawCircle(color = p.accent, radius = size.height * 0.09f, center = Offset(right, cy))
     return gateX
 }
 
@@ -307,10 +401,10 @@ private fun DrawScope.drawScene(
     paint: android.graphics.Paint
 ) {
     val cy = size.height / 2f
-    val left = size.width * 0.08f
-    val right = size.width * 0.92f
+    val left = size.width * TRAVEL_LEFT
+    val right = size.width * TRAVEL_RIGHT
     val h = size.height * 0.30f
-    val gateX = baseScene(p, cy)
+    val gateX = baseScene(p, cy, progress)
 
     when (primitive) {
         BypassPrimitive.SPLIT -> {
@@ -413,7 +507,7 @@ private fun DrawScope.drawScene(
             val pw = size.width * 0.26f
             val passed = x > gateX
             packet(x, cy, pw, h * 1.1f, if (passed) p.real else p.fake, alpha = if (passed) 1f else 0.85f, stroke = !passed)
-            label(if (passed) "real" else "ya.ru", x, cy, if (passed) p.onReal else p.fake, paint)
+            label(if (passed) "youtube" else "ya.ru", x, cy, if (passed) p.onReal else p.fake, paint)
         }
 
         BypassPrimitive.HTTPMOD -> {

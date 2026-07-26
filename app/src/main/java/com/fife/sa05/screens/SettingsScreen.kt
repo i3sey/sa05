@@ -62,6 +62,7 @@ import com.fife.sa05.InstalledApp
 import com.fife.sa05.R
 import com.fife.sa05.StrategyExplainer
 import com.fife.sa05.SubscriptionState
+import com.fife.sa05.TrafficRouteExplainer
 import com.fife.sa05.ui.theme.Space
 import com.fife.sa05.ui.theme.clickableScale
 import com.fife.sa05.ui.theme.fadeTransform
@@ -408,6 +409,12 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         )
                     }
                 }
+            }
+            item {
+                TrafficRouteExplainer(
+                    selectedBackend,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
