@@ -241,11 +241,15 @@ internal fun ColumnScope.SettingsScreen(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "Material You",
+                                "Цвета из обоев",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "Системные цвета обоев на Android 12+",
+                                if (dynamicColor) {
+                                    "Приложение подстраивается под обои. Android 12 и новее."
+                                } else {
+                                    "Используется базовая палитра Material."
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
