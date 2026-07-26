@@ -100,7 +100,11 @@ complete Xray configs. The selected profile is identified by `remarks`.
 
 ## Native runtime
 
-- APK is intentionally restricted to `arm64-v8a`.
+- The release APK is intentionally restricted to `arm64-v8a`. The `dev` build type also
+  packages `x86_64` so it runs on an emulator; those libraries are never released.
+  `abiFilters` is derived from the ABI directories that actually contain a full set of
+  native executables, so a checkout without an x86_64 build still yields a working
+  arm64 dev APK.
 - `geoip.dat` and `geosite.dat` were sourced from the published NetGuard
   v1.3.11 APK. Native executables are now reproducibly built by
   `scripts/build-native-arm64.sh` with Go 1.26.4 and Android NDK r29.
@@ -133,8 +137,11 @@ JAVA_HOME=/opt/android-studio/jbr ./gradlew assembleDebug
 Rebuild native executables with:
 
 ```bash
-ANDROID_SDK_ROOT="$HOME/Android/Sdk" scripts/build-native-arm64.sh
+ANDROID_SDK_ROOT="$HOME/Android/Sdk" scripts/build-native.sh arm64-v8a
+ANDROID_SDK_ROOT="$HOME/Android/Sdk" scripts/build-native.sh x86_64   # emulator only
 ```
+
+`scripts/build-native-arm64.sh` remains as an alias for the arm64 build.
 
 Output:
 

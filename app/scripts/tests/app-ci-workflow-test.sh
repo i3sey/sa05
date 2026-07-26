@@ -18,7 +18,9 @@ grep -F 'cache-provider: basic' "$workflow" >/dev/null
 grep -F 'run: ./gradlew lint testDebugUnitTest assembleDev' "$workflow" >/dev/null
 grep -F 'run: python3 scripts/check-elf-16kb.py app/src/main/jniLibs/arm64-v8a/*.so' \
     "$workflow" >/dev/null
-grep -F 'run: scripts/check-16kb-compat.sh app/build/outputs/apk/dev/app-dev.apk' \
+# A developer who built x86_64 locally gets a two-ABI dev APK, so the dev check must
+# tolerate it. CI itself only ever sees arm64 — x86_64 is not tracked.
+grep -F 'run: scripts/check-16kb-compat.sh app/build/outputs/apk/dev/app-dev.apk arm64-v8a,x86_64' \
     "$workflow" >/dev/null
 grep -F 'run: app/scripts/check-repository-secrets.sh .' "$workflow" >/dev/null
 grep -F 'run: app/scripts/tests/app-ci-workflow-test.sh' "$workflow" >/dev/null

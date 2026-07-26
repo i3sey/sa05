@@ -20,6 +20,18 @@ if (releaseKeystorePath != null) {
     }
 }
 
+/** ABIs that have a complete set of bundled native executables checked in. */
+val availableNativeAbis: Set<String> =
+    file("src/main/jniLibs").listFiles()
+        ?.filter { it.isDirectory }
+        ?.filter { abiDir ->
+            listOf("libxray.so", "libtun2socks.so", "libciadpi.so", "libtgwsproxy.so")
+                .all { File(abiDir, it).isFile }
+        }
+        ?.map { it.name }
+        ?.toSet()
+        .orEmpty()
+
 android {
     namespace = "com.fife.sa05"
     compileSdk {
@@ -53,6 +65,13 @@ android {
             versionNameSuffix = "-dev"
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("debug")
+            // Emulators are x86_64; release stays arm64-only. Only the ABIs whose native
+            // libraries are actually present are added, so a checkout without an x86_64
+            // build still produces a working arm64 dev APK instead of one that installs
+            // on an emulator and dies looking for libxray.so.
+            ndk {
+                abiFilters += availableNativeAbis - "arm64-v8a"
+            }
         }
         release {
             isMinifyEnabled = true

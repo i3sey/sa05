@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validate AArch64 ELF load and RELRO layout for Android 16 KB pages."""
+"""Validate ELF load and RELRO layout for Android 16 KB pages.
+
+arm64-v8a is what ships and is the default. x86_64 is accepted only when asked for
+explicitly, because it exists purely so the dev build runs on an emulator and must never
+reach a release APK.
+"""
 
 from __future__ import annotations
 
@@ -13,13 +18,20 @@ PAGE_SIZE = 16_384
 PT_LOAD = 1
 PT_GNU_RELRO = 0x6474E552
 EM_AARCH64 = 183
+EM_X86_64 = 62
+ABI_MACHINES = {"arm64-v8a": EM_AARCH64, "x86_64": EM_X86_64}
+DEFAULT_ABIS = ("arm64-v8a",)
 ET_DYN = 3
 ELF_HEADER_SIZE = 64
 PROGRAM_HEADER_SIZE = 56
 SECTION_HEADER_SIZE = 64
 
 
-def parse_elf(name: str, data: bytes) -> tuple[list[str], str | None]:
+def parse_elf(
+    name: str,
+    data: bytes,
+    allowed_machines: dict[str, int],
+) -> tuple[list[str], str | None]:
     failures: list[str] = []
     if len(data) < ELF_HEADER_SIZE or data[:4] != b"\x7fELF":
         return [f"{name}: not an ELF file"], None
@@ -29,8 +41,11 @@ def parse_elf(name: str, data: bytes) -> tuple[list[str], str | None]:
     if elf_type != ET_DYN:
         return [f"{name}: expected a position-independent ET_DYN ELF, found type {elf_type}"], None
     machine = struct.unpack_from("<H", data, 18)[0]
-    if machine != EM_AARCH64:
-        return [f"{name}: expected AArch64 (machine {EM_AARCH64}), found {machine}"], None
+    if machine not in allowed_machines.values():
+        expected = ", ".join(
+            f"{abi} (machine {value})" for abi, value in sorted(allowed_machines.items())
+        )
+        return [f"{name}: expected {expected}, found machine {machine}"], None
 
     phoff = struct.unpack_from("<Q", data, 32)[0]
     shoff = struct.unpack_from("<Q", data, 40)[0]
@@ -135,9 +150,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("elf", nargs="*", type=Path)
     parser.add_argument("--apk", type=Path)
+    parser.add_argument(
+        "--abis",
+        default=",".join(DEFAULT_ABIS),
+        help=(
+            "comma-separated ABIs to accept "
+            f"(known: {', '.join(sorted(ABI_MACHINES))}; default: {','.join(DEFAULT_ABIS)})"
+        ),
+    )
     args = parser.parse_args()
     if bool(args.apk) == bool(args.elf):
         parser.error("pass either --apk APK or one or more ELF files")
+
+    abis = [abi.strip() for abi in args.abis.split(",") if abi.strip()]
+    unknown = [abi for abi in abis if abi not in ABI_MACHINES]
+    if unknown:
+        parser.error(f"unknown ABI(s): {', '.join(unknown)}")
+    allowed_machines = {abi: ABI_MACHINES[abi] for abi in abis}
 
     failures: list[str] = []
     successes: list[str] = []
@@ -155,16 +184,18 @@ def main() -> int:
                 failures.append("APK contains no native libraries")
             for info in native_entries:
                 parts = info.filename.split("/")
-                if len(parts) != 3 or parts[1] != "arm64-v8a":
-                    failures.append(f"{info.filename}: SA05 supports only arm64-v8a")
+                if len(parts) != 3 or parts[1] not in allowed_machines:
+                    failures.append(
+                        f"{info.filename}: unexpected ABI, allowed: {', '.join(sorted(abis))}"
+                    )
                     continue
-                errors, success = parse_elf(info.filename, apk.read(info))
+                errors, success = parse_elf(info.filename, apk.read(info), allowed_machines)
                 failures.extend(errors)
                 if success:
                     successes.append(success)
     else:
         for path in args.elf:
-            errors, success = parse_elf(str(path), path.read_bytes())
+            errors, success = parse_elf(str(path), path.read_bytes(), allowed_machines)
             failures.extend(errors)
             if success:
                 successes.append(success)
