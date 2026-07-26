@@ -157,6 +157,19 @@ internal fun ColumnScope.MainScreen(
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
             )
+            if (subscription.profiles.isEmpty()) {
+                // An empty sheet reads as a bug; say what happened and what to do about it.
+                Text(
+                    "Подписка не вернула ни одного профиля. Обновите её в настройках или " +
+                        "проверьте ссылку у провайдера.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(
+                        horizontal = 24.dp,
+                        vertical = Space.Content
+                    )
+                )
+            }
             LazyColumn {
                 items(subscription.profiles, key = { it.id }) { profile ->
                     ProfileChoice(

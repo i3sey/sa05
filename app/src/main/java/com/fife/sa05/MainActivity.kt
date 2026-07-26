@@ -217,23 +217,58 @@ private fun AppNavigationBar(
     screen: AppScreen,
     onSelect: (AppScreen) -> Unit
 ) {
+    // Material pairs a filled icon with the selected destination and an outlined one with the
+    // rest; drawing the same glyph in both states left the pill indicator as the only cue.
     NavigationBar {
         NavigationBarItem(
             selected = screen == AppScreen.MAIN,
             onClick = { onSelect(AppScreen.MAIN) },
-            icon = { Icon(painterResource(R.drawable.ic_home), contentDescription = null) },
+            icon = {
+                Icon(
+                    painterResource(
+                        if (screen == AppScreen.MAIN) {
+                            R.drawable.ic_home
+                        } else {
+                            R.drawable.ic_home_outlined
+                        }
+                    ),
+                    contentDescription = null
+                )
+            },
             label = { androidx.compose.material3.Text("Главная") }
         )
         NavigationBarItem(
             selected = screen == AppScreen.DIAGNOSTICS,
             onClick = { onSelect(AppScreen.DIAGNOSTICS) },
-            icon = { Icon(painterResource(R.drawable.ic_check_circle), contentDescription = null) },
+            icon = {
+                Icon(
+                    painterResource(
+                        if (screen == AppScreen.DIAGNOSTICS) {
+                            R.drawable.ic_check_circle
+                        } else {
+                            R.drawable.ic_check_circle_outlined
+                        }
+                    ),
+                    contentDescription = null
+                )
+            },
             label = { androidx.compose.material3.Text("Проверка") }
         )
         NavigationBarItem(
             selected = screen == AppScreen.SETTINGS,
             onClick = { onSelect(AppScreen.SETTINGS) },
-            icon = { Icon(painterResource(R.drawable.ic_settings), contentDescription = null) },
+            icon = {
+                Icon(
+                    painterResource(
+                        if (screen == AppScreen.SETTINGS) {
+                            R.drawable.ic_settings
+                        } else {
+                            R.drawable.ic_settings_outlined
+                        }
+                    ),
+                    contentDescription = null
+                )
+            },
             label = { androidx.compose.material3.Text("Настройки") }
         )
     }
