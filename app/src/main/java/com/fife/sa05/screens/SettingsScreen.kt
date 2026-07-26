@@ -63,6 +63,7 @@ import com.fife.sa05.InstalledApp
 import com.fife.sa05.R
 import com.fife.sa05.StrategyExplainer
 import com.fife.sa05.SubscriptionState
+import com.fife.sa05.ui.theme.Space
 import com.fife.sa05.ui.theme.clickableScale
 import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.motionEnabled
@@ -96,8 +97,8 @@ internal fun ColumnScope.SettingsScreen(
     ContentScreen(title = "Настройки", onBack = onBack) {
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 28.dp)
+            verticalArrangement = Arrangement.spacedBy(Space.Item),
+            contentPadding = PaddingValues(bottom = Space.ScrollBottom)
         ) {
             item { SectionTitle("Обновление приложения") }
             item {
@@ -364,8 +365,8 @@ internal fun ColumnScope.AdvancedSettingsScreen(
     ContentScreen(title = "Расширенные", onBack = onBack) {
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 24.dp)
+            verticalArrangement = Arrangement.spacedBy(Space.Item),
+            contentPadding = PaddingValues(bottom = Space.ScrollBottom)
         ) {
             item { SectionTitle("Маршрут") }
             item {

@@ -33,7 +33,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -80,6 +82,7 @@ import com.fife.sa05.parseServerRemark
 import com.fife.sa05.ProfileExplainer
 import com.fife.sa05.ProfilePing
 import kotlinx.coroutines.delay
+import com.fife.sa05.ui.theme.Space
 import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.motionEnabled
 import com.fife.sa05.ui.theme.pressScale
@@ -182,11 +185,11 @@ internal fun ColumnScope.MainScreen(
     ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(Space.Item),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            bottom = 28.dp
+            start = Space.Content,
+            end = Space.Content,
+            bottom = Space.ScrollBottom
         )
     ) {
         item {
@@ -232,6 +235,8 @@ internal fun ColumnScope.MainScreen(
                 )
             }
         }
+        // Three navigational rows that all answer "how is this VPN set up" belong in one
+        // group; as separate cards they read as three unrelated decisions.
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
@@ -244,28 +249,13 @@ internal fun ColumnScope.MainScreen(
                         trailingFlag = activeRemark.flag,
                         onClick = { profileSheetVisible = true }
                     )
-                    androidx.compose.material3.HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
+                    RowDivider()
                     DashboardRow(
                         title = "Исключения приложений",
                         subtitle = "Приложения с прямым доступом",
                         onClick = onExclusions
                     )
-                }
-            }
-        }
-        item {
-            TelegramCard(
-                runtime = telegramRuntime,
-                onStart = onStartTelegram,
-                onStop = onStopTelegram,
-                onOpen = onOpenTelegram
-            )
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
+                    RowDivider()
                     DashboardRow(
                         title = "Проверка подключения",
                         subtitle = connectionCheck.simpleText(),
@@ -278,40 +268,71 @@ internal fun ColumnScope.MainScreen(
                             "Откройте проверку, чтобы узнать, что именно не работает.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
+                            modifier = Modifier.padding(
+                                start = Space.Content,
+                                end = Space.Content,
+                                bottom = Space.Item
+                            )
                         )
                     }
                 }
             }
         }
+        item {
+            TelegramCard(
+                runtime = telegramRuntime,
+                onStart = onStartTelegram,
+                onStop = onStopTelegram,
+                onOpen = onOpenTelegram
+            )
+        }
     }
     }
 }
 
+/**
+ * An available update is worth mentioning, not worth shouting: on primaryContainer it was the
+ * loudest thing on the screen after the connect control, which put "there is a new build" on a
+ * par with "your VPN is off". An outlined card states it without competing.
+ */
 @Composable
 private fun UpdateBanner(versionName: String, onClick: () -> Unit) {
-    Card(
+    OutlinedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-        )
+            .clickable(onClick = onClick)
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(Space.Content),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(Space.Item)
         ) {
-            Icon(painterResource(R.drawable.ic_check_circle), contentDescription = null)
+            Icon(
+                painterResource(R.drawable.ic_download),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
             Column(Modifier.weight(1f)) {
                 Text("Доступно обновление", style = MaterialTheme.typography.titleMedium)
-                Text("Версия $versionName готова к установке")
+                Text(
+                    "Версия $versionName готова к установке",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            Text("Открыть", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Открыть",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
     }
+}
+
+/** Inset so the rule separates the rows' text, not the card's edges. */
+@Composable
+private fun RowDivider() {
+    HorizontalDivider(modifier = Modifier.padding(horizontal = Space.Content))
 }
 
 @Composable

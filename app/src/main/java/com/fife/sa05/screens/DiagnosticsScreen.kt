@@ -34,6 +34,7 @@ import com.fife.sa05.DiagnosticResult
 import com.fife.sa05.DiagnosticStatus
 import com.fife.sa05.DiagnosticTarget
 import com.fife.sa05.connectionCheckSummary
+import com.fife.sa05.ui.theme.Space
 import com.fife.sa05.ui.theme.motionTween
 import com.fife.sa05.ui.theme.tabularFigures
 
@@ -113,14 +114,14 @@ internal fun DiagnosticsScreen(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 28.dp)
+        verticalArrangement = Arrangement.spacedBy(Space.Item),
+        contentPadding = PaddingValues(bottom = Space.ScrollBottom)
     ) {
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    Modifier.padding(Space.Content),
+                    verticalArrangement = Arrangement.spacedBy(Space.Item)
                 ) {
                     Text("Проверка подключения", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -171,8 +172,8 @@ internal fun DiagnosticsScreen(
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    Modifier.padding(Space.Content),
+                    verticalArrangement = Arrangement.spacedBy(Space.Tight)
                 ) {
                     Text("Отчёт для поддержки", style = MaterialTheme.typography.titleMedium)
                     Text(
