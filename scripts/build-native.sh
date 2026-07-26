@@ -123,13 +123,28 @@ export CC="$cc"
 export GOTOOLCHAIN=local
 export GOFLAGS=-mod=readonly
 
+# The Beeline short-session-ID patch has to go on before the build. Without it this script
+# produced a stock upstream core and silently replaced the patched one in jniLibs, taking the
+# XHTTP 403 fix with it — the exact regression XrayCore.SHA256 exists to catch.
+echo "Applying the Beeline session-ID patch"
+"$repo_root/ci/patch-xray.sh" "$work_dir/xray-core" "$repo_root/ci" >/dev/null
+(
+    cd "$work_dir/xray-core"
+    go test ./transport/internet/splithttp/ -run TestNewBeelineSessionID -count=1 >/dev/null
+) || {
+    echo "Beeline session-ID patch did not take; refusing to ship an unpatched core" >&2
+    exit 1
+}
+
 echo "Building Xray for $abi"
 (
     cd "$work_dir/xray-core"
+    # -checklinkname=0: the wlynxg/anet dependency reaches net.zoneCache through
+    # //go:linkname, which Go 1.23+ rejects by default.
     go build \
         -buildvcs=false \
         -trimpath \
-        -ldflags="-s -w -linkmode=external -extldflags=$page_ldflags" \
+        -ldflags="-s -w -checklinkname=0 -linkmode=external -extldflags=$page_ldflags" \
         -o "$staging/libxray.so" \
         ./main
 )
@@ -151,12 +166,16 @@ if [[ ! -f "$tun2socks_output" ]]; then
 fi
 cp "$tun2socks_output" "$staging/libtun2socks.so"
 
+# Dynamically linked against bionic, not -static-pie. Static PIE executables segfault before
+# reaching main on current Android: a bare printf() built that way dies the same way ByeDPI
+# did, while the identical source linked dynamically runs. bionic ships on every device, so
+# there is nothing to gain from static linking here.
 echo "Building ByeDPI for $abi"
 make -C "$work_dir/byedpi" \
     -j"$(nproc)" \
     CC="$cc" \
     CFLAGS="-I. -std=c99 -O2 -Wall -Wno-unused -Wextra -Wno-unused-parameter -pedantic -fPIE" \
-    LDFLAGS="-static-pie $page_ldflags"
+    LDFLAGS="-pie $page_ldflags"
 cp "$work_dir/byedpi/ciadpi" "$staging/libciadpi.so"
 "$strip" --strip-all "$staging/libciadpi.so"
 
@@ -191,8 +210,14 @@ go version -m "$staging/libxray.so" | grep -F $'path\tgithub.com/xtls/xray-core/
     echo "libxray.so was not built from the expected Go package" >&2
     exit 1
 }
-if "$readelf" -lW "$staging/libciadpi.so" | grep INTERP >/dev/null; then
-    echo "libciadpi.so must remain a static PIE executable" >&2
+# The opposite of what this used to assert. A missing INTERP means the binary was linked
+# static-pie again, which loads on the build host and segfaults on the device.
+if ! "$readelf" -lW "$staging/libciadpi.so" | grep INTERP >/dev/null; then
+    echo "libciadpi.so must be a dynamically linked PIE; static PIE crashes on Android" >&2
+    exit 1
+fi
+if ! "$readelf" -hW "$staging/libciadpi.so" | grep -q "DYN"; then
+    echo "libciadpi.so must stay position independent" >&2
     exit 1
 fi
 

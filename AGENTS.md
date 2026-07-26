@@ -111,8 +111,12 @@ complete Xray configs. The selected profile is identified by `remarks`.
 - Xray is pinned to commit `d2758a023cd7f4174a5a5fa4ff66e487d4342ba0`
   because the requested config uses modern transports including Reality,
   XHTTP, and Hysteria.
-- `libciadpi.so` is built as a static aarch64 PIE from ByeDPI v0.17.3 and
-  packaged with a `.so` name so Android extracts it as executable.
+- `libciadpi.so` is built from ByeDPI v0.17.3 as a **dynamically linked** aarch64 PIE and
+  packaged with a `.so` name so Android extracts it as executable. It must not be linked
+  `-static-pie`: static PIE executables segfault before reaching `main` on current Android,
+  which silently disabled Local Bypass and the Full Auto ByeDPI branch. A bare `printf()`
+  built `-static-pie` fails identically, so this is the platform, not ByeDPI.
+  `scripts/build-native.sh` fails the build if the binary comes out without an `INTERP`.
 - Current ByeDPI presets are based on the upstream v0.17.x options and examples
   (`fake-tls-mod`, `tlsminor`, `auto-mode`, adaptive fake/OOB chains):
   https://github.com/hufrea/byedpi and
