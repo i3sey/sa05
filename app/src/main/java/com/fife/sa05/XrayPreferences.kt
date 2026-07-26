@@ -50,7 +50,8 @@ internal data class XraySettings(
     val telegramProxyApplied: Boolean = false,
     val telegramProxyExplainerSeen: Boolean = false,
     val zapretAutoCaches: List<ZapretAutoCache> = emptyList(),
-    val youtubeAutoCaches: List<ZapretAutoCache> = emptyList()
+    val youtubeAutoCaches: List<ZapretAutoCache> = emptyList(),
+    val strategyMemories: List<StrategyMemory> = emptyList()
 )
 
 object XrayPreferences {
@@ -77,6 +78,7 @@ object XrayPreferences {
     private const val KEY_TELEGRAM_SECRET = "telegram_secret"
     private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
     private const val KEY_TELEGRAM_EXPLAINER_SEEN = "telegram_explainer_seen"
+    private const val KEY_STRATEGY_DB = "strategy_db"
     private const val MAX_NETWORK_CACHE_ENTRIES = 16
 
     internal val defaultConfig = """
@@ -125,6 +127,7 @@ object XrayPreferences {
     private val youtubeCacheNetworkKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_NETWORK)
     private val youtubeCachePresetKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_PRESET)
     private val youtubeCacheVersionKey = intPreferencesKey(KEY_YOUTUBE_CACHE_VERSION)
+    private val strategyDbKey = stringPreferencesKey(KEY_STRATEGY_DB)
 
     internal fun migrations(
         context: Context,
@@ -153,7 +156,8 @@ object XrayPreferences {
             telegramProxyApplied = preferences[telegramAppliedKey] ?: false,
             telegramProxyExplainerSeen = preferences[telegramExplainerSeenKey] ?: false,
             zapretAutoCaches = migratedZapretAutoCaches(preferences),
-            youtubeAutoCaches = migratedYoutubeAutoCaches(preferences)
+            youtubeAutoCaches = migratedYoutubeAutoCaches(preferences),
+            strategyMemories = StrategyDatabase.decode(preferences[strategyDbKey])
         )
     }
 
@@ -233,6 +237,46 @@ object XrayPreferences {
 
     suspend fun markTelegramProxyExplainerSeen(context: Context) {
         dataStore(context).edit { it[telegramExplainerSeenKey] = true }
+    }
+
+    internal suspend fun strategyMemory(
+        context: Context,
+        fingerprintKey: String,
+        algorithmVersion: Int,
+        nowMillis: Long = System.currentTimeMillis()
+    ): StrategyMemory? = StrategyDatabase.lookup(
+        entries = snapshot(context).strategyMemories,
+        fingerprintKey = fingerprintKey,
+        algorithmVersion = algorithmVersion,
+        nowMillis = nowMillis
+    )
+
+    internal suspend fun saveStrategyMemory(context: Context, entry: StrategyMemory) {
+        dataStore(context).edit { preferences ->
+            val current = StrategyDatabase.decode(preferences[strategyDbKey])
+            val pruned = StrategyDatabase.prune(current, entry.updatedAtMillis)
+            preferences[strategyDbKey] =
+                StrategyDatabase.encode(StrategyDatabase.upsert(pruned, entry))
+        }
+    }
+
+    /** Import is advisory: [StrategyDatabase.merge] keeps better local knowledge. */
+    internal suspend fun mergeStrategyMemories(context: Context, imported: List<StrategyMemory>): Int {
+        var added = 0
+        dataStore(context).edit { preferences ->
+            val current = StrategyDatabase.decode(preferences[strategyDbKey])
+            val merged = StrategyDatabase.merge(current, imported)
+            added = merged.size - current.size
+            preferences[strategyDbKey] = StrategyDatabase.encode(merged)
+        }
+        return added
+    }
+
+    internal suspend fun exportStrategyMemories(context: Context): String =
+        StrategyDatabase.encode(snapshot(context).strategyMemories)
+
+    internal suspend fun clearStrategyMemories(context: Context) {
+        dataStore(context).edit { it.remove(strategyDbKey) }
     }
 
     suspend fun zapretAutoCache(context: Context, networkKey: String): ZapretAutoCache? =

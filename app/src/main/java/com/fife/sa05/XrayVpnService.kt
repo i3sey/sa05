@@ -16,6 +16,7 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -370,6 +371,22 @@ class XrayVpnService : VpnService() {
         return BackendStart(ZAPRET_BRIDGE_PORT)
     }
 
+    private suspend fun rememberStrategy(fingerprint: NetworkFingerprint, preset: ZapretPreset) {
+        if (fingerprint.key.isBlank() || preset == ZapretPreset.AUTO) return
+        runCatching {
+            XrayPreferences.saveStrategyMemory(
+                this,
+                StrategyMemory(
+                    fingerprintKey = fingerprint.key,
+                    preset = preset,
+                    successCount = 1,
+                    algorithmVersion = ZAPRET_AUTO_ALGORITHM_VERSION,
+                    updatedAtMillis = System.currentTimeMillis()
+                )
+            )
+        }.onFailure { Log.w("ByeDPI", "Could not remember strategy", it) }
+    }
+
     private suspend fun resolveAutoPreset(): AutoPresetResolution {
         val networkKey = networkKey()
         val diagnostics = ConnectivityDiagnostics()
@@ -387,7 +404,15 @@ class XrayVpnService : VpnService() {
                 )
             }
         )
-        val cached = XrayPreferences.zapretAutoCache(this, networkKey)
+        // The direct probes just told us what this network blocks, so the fingerprint can carry
+        // that signature and stay meaningful across reconnects and cells.
+        val fingerprint = networkFingerprint(directResults)
+        val remembered = XrayPreferences.strategyMemory(
+            this,
+            fingerprint.key,
+            ZAPRET_AUTO_ALGORITHM_VERSION
+        )?.preset
+        val cached = remembered ?: XrayPreferences.zapretAutoCache(this, networkKey)
             ?.takeIf {
                 it.networkKey == networkKey &&
                     it.algorithmVersion == ZAPRET_AUTO_ALGORITHM_VERSION
@@ -429,6 +454,7 @@ class XrayVpnService : VpnService() {
                             ZAPRET_AUTO_ALGORITHM_VERSION
                         )
                     )
+                    rememberStrategy(fingerprint, preset)
                     return AutoPresetResolution(
                         preset = preset,
                         verified = true,
@@ -453,6 +479,8 @@ class XrayVpnService : VpnService() {
                 ZAPRET_AUTO_ALGORITHM_VERSION
             )
         )
+        // A fallback preset is a guess, not a confirmation, so it is not remembered: writing it
+        // down would make the next connection trust an unverified answer.
         return AutoPresetResolution(
             preset = best.first,
             verified = false,
@@ -1132,6 +1160,44 @@ class XrayVpnService : VpnService() {
     }
 
     private fun networkKey(): String = currentNetwork()?.key.orEmpty()
+
+    /**
+     * Stable identity of the current network for the strategy database.
+     *
+     * Deliberately excludes [android.net.Network.networkHandle], which [currentNetwork] uses:
+     * that handle is reissued on every reconnect, so a key built on it threw away a remembered
+     * preset the moment the user left Wi-Fi range and came back.
+     */
+    private fun networkFingerprint(results: List<DiagnosticResult> = emptyList()): NetworkFingerprint {
+        val network = connectivityManager.activeNetwork
+        val capabilities = network?.let(connectivityManager::getNetworkCapabilities)
+        val type = when {
+            capabilities == null -> VpnNetworkType.NONE
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> VpnNetworkType.WIFI
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> VpnNetworkType.MOBILE
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> VpnNetworkType.ETHERNET
+            else -> VpnNetworkType.OTHER
+        }
+        val operator = when (type) {
+            // getSimOperator/getNetworkOperator need no runtime permission.
+            VpnNetworkType.MOBILE -> runCatching {
+                val telephony = getSystemService(TelephonyManager::class.java)
+                telephony?.simOperator?.takeIf(String::isNotBlank)
+                    ?: telephony?.networkOperator.orEmpty()
+            }.getOrDefault("")
+            else -> resolverDigest(
+                network?.let(connectivityManager::getLinkProperties)
+                    ?.dnsServers
+                    ?.mapNotNull { it.hostAddress }
+                    .orEmpty()
+            )
+        }
+        return NetworkFingerprint(
+            transport = type,
+            operator = operator,
+            dpiSignature = dpiSignature(results)
+        )
+    }
 
     private fun createTun(): ParcelFileDescriptor = tunController.establish(
         session = "SA05 ${runningBackend.title}",
