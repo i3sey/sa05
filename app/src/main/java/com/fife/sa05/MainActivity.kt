@@ -16,6 +16,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Column
@@ -304,6 +305,49 @@ private fun XrayScreen(
     var telegramStartRequested by remember { mutableStateOf(false) }
     var showTelegramExplainer by remember { mutableStateOf(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val exportStrategies = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val written = runCatching {
+                val payload = XrayPreferences.exportStrategyMemories(context)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use {
+                        it.write(payload.toByteArray())
+                    } ?: error("Не удалось открыть файл")
+                }
+            }
+            message = if (written.isSuccess) {
+                "База стратегий сохранена"
+            } else {
+                "Не удалось сохранить базу стратегий"
+            }
+        }
+    }
+    val importStrategies = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = runCatching {
+                val raw = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use {
+                        it.readBytes().decodeToString()
+                    } ?: error("Не удалось открыть файл")
+                }
+                val entries = StrategyDatabase.decode(raw)
+                check(entries.isNotEmpty()) { "В файле нет записей" }
+                XrayPreferences.mergeStrategyMemories(context, entries)
+            }
+            message = result.fold(
+                onSuccess = { added ->
+                    if (added > 0) "Добавлено записей: $added" else "Новых записей нет"
+                },
+                onFailure = { "Не удалось прочитать базу стратегий" }
+            )
+        }
+    }
 
     fun applyTelegramProxy() {
         scope.launch {
@@ -842,6 +886,7 @@ private fun XrayScreen(
                     zapretPreset = zapretPreset,
                     customZapretArguments = customZapretArguments,
                     allowIpv6Bypass = allowIpv6Bypass,
+                    strategyMemoryCount = preferences.strategyMemories.size,
                     telegramCfEnabled = telegramCfEnabled,
                     telegramCfDomain = telegramCfDomain,
                     onBack = { screen = AppScreen.SETTINGS },
@@ -886,6 +931,18 @@ private fun XrayScreen(
                                     "Переподключаем VPN: IPv6 закрыт туннелем"
                                 }
                             }
+                        }
+                    },
+                    onExportStrategies = {
+                        exportStrategies.launch("sa05-strategies.json")
+                    },
+                    onImportStrategies = {
+                        importStrategies.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    },
+                    onClearStrategies = {
+                        scope.launch {
+                            XrayPreferences.clearStrategyMemories(context)
+                            message = "Запомненные стратегии удалены"
                         }
                     },
                     onHosts = { screen = AppScreen.HOSTS },

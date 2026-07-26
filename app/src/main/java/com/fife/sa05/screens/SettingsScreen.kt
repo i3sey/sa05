@@ -267,10 +267,14 @@ internal fun ColumnScope.AdvancedSettingsScreen(
     allowIpv6Bypass: Boolean,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
+    strategyMemoryCount: Int,
     onBack: () -> Unit,
     onSelectBackend: (VpnBackend) -> Unit,
     onSelectZapretPreset: (ZapretPreset) -> Unit,
     onAllowIpv6BypassChanged: (Boolean) -> Unit,
+    onExportStrategies: () -> Unit,
+    onImportStrategies: () -> Unit,
+    onClearStrategies: () -> Unit,
     onHosts: () -> Unit,
     onCustomZapretArgumentsChanged: (String) -> Unit,
     onSaveCustomZapretArguments: () -> Unit,
@@ -410,6 +414,47 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                             checked = allowIpv6Bypass,
                             onCheckedChange = onAllowIpv6BypassChanged
                         )
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            "Запомненные стратегии",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Text(
+                            if (strategyMemoryCount == 0) {
+                                "Приложение ещё не запоминало, какой обход работает в ваших " +
+                                    "сетях. Записи появятся после успешного автоподбора."
+                            } else {
+                                "Записей: $strategyMemoryCount. Привязаны к оператору и набору " +
+                                    "блокировок, а не к конкретному подключению, поэтому " +
+                                    "переживают переподключение."
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Файл можно передать другому человеку с тем же оператором. " +
+                                "Импорт не перетирает то, что подтвердил ваш телефон, и не " +
+                                "содержит ни ссылки подписки, ни адресов серверов.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = onExportStrategies,
+                                enabled = strategyMemoryCount > 0
+                            ) { Text("Экспорт") }
+                            OutlinedButton(onClick = onImportStrategies) { Text("Импорт") }
+                            if (strategyMemoryCount > 0) {
+                                TextButton(onClick = onClearStrategies) { Text("Очистить") }
+                            }
+                        }
                     }
                 }
             }
