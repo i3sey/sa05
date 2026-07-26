@@ -35,6 +35,7 @@ import com.fife.sa05.DiagnosticStatus
 import com.fife.sa05.DiagnosticTarget
 import com.fife.sa05.connectionCheckSummary
 import com.fife.sa05.ui.theme.motionTween
+import com.fife.sa05.ui.theme.tabularFigures
 
 private fun ConnectionSummaryStatus.label(): String = when (this) {
     ConnectionSummaryStatus.NOT_CHECKED -> "Не проверено"
@@ -121,7 +122,7 @@ internal fun DiagnosticsScreen(
                     Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text("Проверка подключения", style = MaterialTheme.typography.titleLarge)
+                    Text("Проверка подключения", style = MaterialTheme.typography.titleMedium)
                     Text(
                         summary.recommendation,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -129,7 +130,7 @@ internal fun DiagnosticsScreen(
                     if (diagnosticRunning) {
                         Text(
                             "Проверено ${results.size} из ${ConnectivityDiagnostics.targets.size}",
-                            style = MaterialTheme.typography.labelLarge
+                            style = MaterialTheme.typography.labelLarge.tabularFigures()
                         )
                         val progress by animateFloatAsState(
                             targetValue = results.size.toFloat() /
@@ -262,7 +263,8 @@ private fun TechnicalDiagnostics(
                         Text(target.label, style = MaterialTheme.typography.titleSmall)
                         Text(
                             if (active) "Запрос выполняется" else diagnosticResultText(result),
-                            style = MaterialTheme.typography.bodySmall,
+                            // Status code and latency; a column of these should line up.
+                            style = MaterialTheme.typography.bodySmall.tabularFigures(),
                             color = when {
                                 active -> MaterialTheme.colorScheme.tertiary
                                 result?.status == DiagnosticStatus.FAILED -> MaterialTheme.colorScheme.error

@@ -521,7 +521,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                     ) {
                         Text(
                             "Запомненные стратегии",
-                            style = MaterialTheme.typography.titleLarge
+                            style = MaterialTheme.typography.titleMedium
                         )
                         Text(
                             if (strategyMemoryCount == 0) {
@@ -560,7 +560,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("Локальный обход", style = MaterialTheme.typography.titleLarge)
+                        Text("Локальный обход", style = MaterialTheme.typography.titleMedium)
                         Text(
                             "Свои параметры используются только при выборе стратегии " +
                                 "«Свои параметры».",
@@ -585,7 +585,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("Telegram", style = MaterialTheme.typography.titleLarge)
+                        Text("Telegram", style = MaterialTheme.typography.titleMedium)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,

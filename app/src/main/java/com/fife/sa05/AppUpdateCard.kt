@@ -40,7 +40,7 @@ fun AppUpdateCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("Обновление приложения", style = MaterialTheme.typography.titleLarge)
+            Text("Обновление приложения", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Текущая версия: $currentVersionName ($currentVersionCode)",
                 color = MaterialTheme.colorScheme.onSurfaceVariant

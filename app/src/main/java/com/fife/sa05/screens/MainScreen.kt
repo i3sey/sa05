@@ -80,6 +80,7 @@ import kotlinx.coroutines.delay
 import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.motionEnabled
 import com.fife.sa05.ui.theme.pressScale
+import com.fife.sa05.ui.theme.tabularFigures
 
 private fun ConnectionCheckState.simpleText(): String = when (this) {
     ConnectionCheckState.Idle -> "Проверка доступна после подключения"
@@ -325,7 +326,15 @@ private fun ProfileChoice(
         ListItem(
             headlineContent = { Text(remark.name.ifBlank { "Сервер" }) },
             supportingContent = {
-                Text(ping.label() ?: if (selected) "Выбран" else profile.remarks)
+                val label = ping.label()
+                Text(
+                    label ?: if (selected) "Выбран" else profile.remarks,
+                    style = if (label != null && ping is ProfilePing.Success) {
+                        MaterialTheme.typography.bodyMedium.tabularFigures()
+                    } else {
+                        MaterialTheme.typography.bodyMedium
+                    }
+                )
             },
             leadingContent = {
                 if (selected) Icon(painterResource(R.drawable.ic_check_circle), contentDescription = null)
@@ -521,7 +530,8 @@ private fun VpnUptime(connectedAtMillis: Long, traffic: VpnTraffic, color: Color
     Text(
         "На связи ${formatUptime(now - connectedAtMillis)} · " +
             "↓ ${formatBytes(traffic.rxBytes)} ↑ ${formatBytes(traffic.txBytes)}",
-        style = MaterialTheme.typography.bodySmall,
+        // Reticks every second; proportional digits would make it wobble in place.
+        style = MaterialTheme.typography.bodySmall.tabularFigures(),
         color = color
     )
 }

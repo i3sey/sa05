@@ -19,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.fife.sa05.R
 import com.fife.sa05.ui.theme.clickableScale
 import com.fife.sa05.ui.theme.fadeTransform
@@ -77,16 +76,19 @@ internal fun FlagBadge(flag: String) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        Text(flag, fontSize = 20.sp)
+        // An emoji flag is a glyph, not prose: it takes a scale role rather than a loose size.
+        Text(flag, style = MaterialTheme.typography.titleLarge)
     }
 }
 
 @Composable
 internal fun SectionTitle(title: String) {
+    // A list subheader labels the group below it; at titleMedium it competed with the card
+    // titles it was meant to introduce.
     Text(
         title,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 4.dp, top = 4.dp)
     )
 }
