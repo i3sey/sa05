@@ -92,6 +92,39 @@ class DetectWhitelistTest {
     }
 
     @Test
+    fun `either domestic probe is enough to prove the network is alive`() {
+        // Ya.ru down for its own reasons must not hide an allow-list.
+        assertTrue(
+            verdict(
+                "yandex" to false,
+                "vk" to true,
+                "google" to false,
+                "youtube" to false
+            ).suspected
+        )
+        assertTrue(
+            verdict(
+                "yandex" to true,
+                "vk" to false,
+                "google" to false,
+                "youtube" to false
+            ).suspected
+        )
+    }
+
+    @Test
+    fun `both domestic probes down is an outage, not an allow-list`() {
+        assertFalse(
+            verdict(
+                "yandex" to false,
+                "vk" to false,
+                "google" to false,
+                "youtube" to false
+            ).suspected
+        )
+    }
+
+    @Test
     fun `no probes at all means no verdict`() {
         assertFalse(detectWhitelist(emptyList()).suspected)
     }
@@ -108,6 +141,41 @@ class DetectWhitelistTest {
         )
 
         assertTrue(detectWhitelist(results).suspected)
+    }
+}
+
+class DomesticProbeWiringTest {
+    @Test
+    fun `the domestic probe stays out of preset selection`() {
+        // autoTargets drives ByeDPI preset scoring. A probe that keeps answering under an
+        // allow-list would tell that search the network is healthy when it is not.
+        assertTrue(ConnectivityDiagnostics.autoTargets.none { it.id == "vk" })
+    }
+
+    @Test
+    fun `the domestic probe does not count as a bypass success`() {
+        val results = listOf(
+            DiagnosticResult(
+                target = ConnectivityDiagnostics.target("vk"),
+                status = DiagnosticStatus.SUCCESS
+            )
+        )
+
+        assertEquals(0, ConnectivityDiagnostics.bypassScore(results))
+    }
+
+    @Test
+    fun `a reachable domestic probe alone does not mean the internet works`() {
+        // controlWorks answers "can this device reach the open internet"; VK cannot vouch
+        // for that, which is the whole reason it sits in its own group.
+        val results = listOf(
+            DiagnosticResult(
+                target = ConnectivityDiagnostics.target("vk"),
+                status = DiagnosticStatus.SUCCESS
+            )
+        )
+
+        assertFalse(ConnectivityDiagnostics.controlWorks(results))
     }
 }
 

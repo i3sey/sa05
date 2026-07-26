@@ -16,8 +16,13 @@ internal data class WhitelistVerdict(
     val blockedForeign: List<String>
 )
 
-/** Probes whose reachability says "the connection itself is alive". */
-private val DOMESTIC_TARGET_IDS = setOf("yandex")
+/**
+ * Probes whose reachability says "the connection itself is alive".
+ *
+ * More than one, so a single domestic service being down for its own reasons cannot hide an
+ * allow-list — any one of them answering is enough evidence that the network works.
+ */
+private val DOMESTIC_TARGET_IDS = setOf("yandex", "vk")
 
 /**
  * Probes that stay reachable under ordinary Russian filtering, so their failure is what

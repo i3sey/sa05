@@ -35,7 +35,16 @@ enum class DiagnosticGroup {
     CONTROL,
     DPI,
     IP,
-    MEDIA
+    MEDIA,
+
+    /**
+     * Domestic services, used only to tell an operator allow-list apart from a dead connection.
+     *
+     * Deliberately its own group rather than CONTROL: under an allow-list these keep answering,
+     * and `controlWorks` treats any reachable CONTROL probe as "the internet is fine", which
+     * would let bypass scoring conclude the network is healthy when nothing foreign resolves.
+     */
+    DOMESTIC
 }
 
 enum class DiagnosticStatus {
@@ -130,6 +139,16 @@ class ConnectivityDiagnostics {
                 label = "Telegram",
                 url = "https://telegram.org/",
                 group = DiagnosticGroup.IP
+            ),
+            // Second domestic probe so allow-list detection does not hinge on Ya.ru alone
+            // being up.
+            DiagnosticTarget(
+                id = "vk",
+                label = "VK",
+                url = "https://vk.com/",
+                group = DiagnosticGroup.DOMESTIC,
+                allowedRedirectHosts = setOf("m.vk.com", "www.vk.com", "vk.ru", "www.vk.ru"),
+                informationalOnly = true
             )
         )
 
