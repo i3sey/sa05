@@ -8,8 +8,6 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -38,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -290,7 +289,10 @@ private fun XrayScreen(
     val viewModelMessage by viewModel.messages.collectAsState()
     var urlDraft by remember { mutableStateOf(subscription.url) }
     var selectedApps by remember { mutableStateOf(preferences.excludedApps) }
-    var screen by remember { mutableStateOf(AppScreen.MAIN) }
+
+    // Kotlin enums are Serializable, so the default saver handles this: without it a rotation
+    // dropped the user back to the main screen from wherever they were.
+    var screen by rememberSaveable { mutableStateOf(AppScreen.MAIN) }
     var message by remember { mutableStateOf("") }
     val subscriptionError = uiState.subscriptionError
     val importedSubscription = uiState.importedSubscription
@@ -298,11 +300,9 @@ private fun XrayScreen(
     var pingResults by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var activePing by remember { mutableStateOf<String?>(null) }
     var pingJob by remember { mutableStateOf<Job?>(null) }
-    var diagnosticResults by remember { mutableStateOf<List<DiagnosticResult>?>(null) }
-    var diagnosticRunning by remember { mutableStateOf(false) }
-    var activeDiagnosticId by remember { mutableStateOf<String?>(null) }
-    var diagnosticRoute by remember { mutableStateOf("") }
-    var diagnosticJob by remember { mutableStateOf<Job?>(null) }
+    val diagnosticsViewModel: DiagnosticsViewModel = viewModel()
+    val diagnosticsState by diagnosticsViewModel.state.collectAsState()
+    val diagnosticsMessage by diagnosticsViewModel.messages.collectAsState()
     val connectionCheck = uiState.connectionCheck
     var excludedBrowserTarget by remember { mutableStateOf<DiagnosticTarget?>(null) }
     var selectedBackend by remember { mutableStateOf(preferences.vpnBackend) }
@@ -319,8 +319,6 @@ private fun XrayScreen(
     }
     val scope = rememberCoroutineScope()
     val pingEngine = remember { XrayPingEngine(context.applicationContext) }
-    val diagnostics = remember { ConnectivityDiagnostics() }
-    val appUpdateRepository = remember { AppUpdateRepository(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val installPermissionMonitor = remember(context) {
         InstallPermissionMonitor { AppUpdateInstaller.canInstallPackages(context) }
@@ -334,12 +332,11 @@ private fun XrayScreen(
     val backendState = vpnRuntime.status
     val snackbarHostState = remember { SnackbarHostState() }
     val authorized = SubscriptionAuth.isAuthorized(subscription)
-    var updateState by remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
-    var updateDownloadSession by remember { mutableStateOf(0L) }
-    var updateDownloadJob by remember { mutableStateOf<Job?>(null) }
+    val updateViewModel: AppUpdateViewModel = viewModel()
+    val updateState by updateViewModel.state.collectAsState()
+    val updateMessage by updateViewModel.messages.collectAsState()
     var telegramStartRequested by remember { mutableStateOf(false) }
     var showTelegramExplainer by remember { mutableStateOf(false) }
-    val mainHandler = remember { Handler(Looper.getMainLooper()) }
     // Re-read on every VPN state change: the address appears and disappears with the network.
     val lanEndpoint by produceState<LanProxyEndpoint?>(
         initialValue = null,
@@ -473,146 +470,10 @@ private fun XrayScreen(
     }
 
     fun runQuickConnectionCheck() {
-        if (backendState != VpnRunStatus.CONNECTED || diagnosticRunning) return
+        if (backendState != VpnRunStatus.CONNECTED || diagnosticsState.running) return
         viewModel.runQuickConnectionCheck(activeSocksPort, vpnRuntime.backend)
     }
 
-    fun stopDiagnostics() {
-        diagnosticJob?.cancel()
-    }
-
-    fun runDiagnostics() {
-        if (diagnosticRunning) return
-        diagnosticJob?.cancel()
-        diagnosticRunning = true
-        diagnosticResults = emptyList()
-        activeDiagnosticId = ConnectivityDiagnostics.targets.first().id
-        val throughVpn = backendState == VpnRunStatus.CONNECTED
-        diagnosticRoute = if (throughVpn) {
-            "backend; TUN активен · " + VpnRuntimeState.read(context).backend.title
-        } else {
-            "прямое соединение"
-        }
-        diagnosticJob = scope.launch {
-            try {
-                val onResult: suspend (DiagnosticResult) -> Unit = { result ->
-                    diagnosticResults = diagnosticResults.orEmpty() + result
-                    val completed = diagnosticResults.orEmpty().size
-                    activeDiagnosticId =
-                        ConnectivityDiagnostics.targets.getOrNull(completed)?.id
-                }
-                diagnosticResults = if (throughVpn) {
-                    val backend = VpnRuntimeState.read(context).backend
-                    diagnostics.runSocks(
-                        activeSocksPort ?: error("SOCKS-порт VPN недоступен"),
-                        resolveForSocks = backend == VpnBackend.LOCAL_BYPASS,
-                        targetsToTest = ConnectivityDiagnostics.targets,
-                        onResult = onResult
-                    )
-                } else {
-                    diagnostics.runDirect(
-                        ConnectivityDiagnostics.targets,
-                        onResult
-                    )
-                }
-            } catch (_: CancellationException) {
-                message = "Проверка остановлена"
-            } finally {
-                diagnosticRunning = false
-                activeDiagnosticId = null
-                diagnosticJob = null
-            }
-        }
-    }
-
-    fun checkAppUpdate(notify: Boolean = false, silent: Boolean = false) {
-        if (updateDownloadJob?.isActive == true) {
-            if (!silent) message = "Дождитесь завершения скачивания обновления"
-            return
-        }
-        scope.launch {
-            updateState = AppUpdateState.Checking
-            val result = try {
-                withContext(Dispatchers.IO) {
-                    appUpdateRepository.checkLatestRelease(
-                        BuildConfig.VERSION_CODE,
-                        BuildConfig.VERSION_NAME
-                    )
-                }
-            } catch (e: Exception) {
-                AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
-            }
-            updateState = result
-            if (!silent && notify && result is AppUpdateState.Available) {
-                message = "Доступна версия ${result.release.versionName}"
-            } else if (!silent && !notify) {
-                message = when (result) {
-                    is AppUpdateState.Available -> "Доступна версия ${result.release.versionName}"
-                    AppUpdateState.UpToDate -> "Установлена актуальная версия"
-                    is AppUpdateState.Error -> "Ошибка проверки: ${result.message}"
-                    else -> message
-                }
-            }
-        }
-    }
-
-    fun downloadAppUpdate(release: AppRelease) {
-        if (updateDownloadJob?.isActive == true) {
-            message = "Обновление уже скачивается"
-            return
-        }
-        val sessionId = ++updateDownloadSession
-        updateDownloadJob = scope.launch {
-            updateState = AppUpdateState.Available(release, downloadProgress = 0)
-            try {
-                val file = withContext(Dispatchers.IO) {
-                    appUpdateRepository.downloadRelease(release) { progress ->
-                        if (progress < 100 && sessionId == updateDownloadSession) {
-                            mainHandler.post {
-                                if (sessionId == updateDownloadSession) {
-                                    updateState = AppUpdateState.Available(
-                                        release = release,
-                                        downloadedPath = null,
-                                        downloadProgress = progress
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                if (sessionId != updateDownloadSession) return@launch
-                updateState = AppUpdateState.Available(
-                    release = release,
-                    downloadedPath = file.absolutePath
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (sessionId == updateDownloadSession) {
-                    updateState = AppUpdateState.Error(
-                        "Не удалось скачать APK: ${e.message ?: e.javaClass.simpleName}"
-                    )
-                }
-            } finally {
-                if (sessionId == updateDownloadSession) {
-                    updateDownloadJob = null
-                }
-            }
-        }
-    }
-
-    fun installDownloadedUpdate(path: String) {
-        val file = java.io.File(path)
-        if (!file.exists()) {
-            updateState = AppUpdateState.Error("APK не найден")
-            return
-        }
-        if (!AppUpdateInstaller.canInstallPackages(context)) {
-            context.startActivity(AppUpdateInstaller.unknownSourcesIntent(context))
-            return
-        }
-        context.startActivity(AppUpdateInstaller.installIntent(context, file))
-    }
 
     LaunchedEffect(preferences.excludedApps) {
         selectedApps = preferences.excludedApps
@@ -639,7 +500,7 @@ private fun XrayScreen(
         if (!updating) urlDraft = subscription.url
     }
     LaunchedEffect(Unit) {
-        checkAppUpdate(silent = true)
+        updateViewModel.check(silent = true)
         if (subscription.url.isNotBlank() && importUrl == null) {
             updateSubscription(subscription.url, silent = true)
         }
@@ -701,6 +562,18 @@ private fun XrayScreen(
         if (viewModelMessage.isNotBlank()) {
             snackbarHostState.showSnackbar(viewModelMessage)
             viewModel.consumeMessage()
+        }
+    }
+    LaunchedEffect(diagnosticsMessage) {
+        if (diagnosticsMessage.isNotBlank()) {
+            snackbarHostState.showSnackbar(diagnosticsMessage)
+            diagnosticsViewModel.consumeMessage()
+        }
+    }
+    LaunchedEffect(updateMessage) {
+        if (updateMessage.isNotBlank()) {
+            snackbarHostState.showSnackbar(updateMessage)
+            updateViewModel.consumeMessage()
         }
     }
 
@@ -869,13 +742,18 @@ private fun XrayScreen(
                     onBack = { screen = AppScreen.MAIN }
                 ) {
                     DiagnosticsScreen(
-                        diagnosticResults = diagnosticResults,
-                        diagnosticRunning = diagnosticRunning,
-                        activeDiagnosticId = activeDiagnosticId,
-                        diagnosticRoute = diagnosticRoute,
+                        diagnosticResults = diagnosticsState.results,
+                        diagnosticRunning = diagnosticsState.running,
+                        activeDiagnosticId = diagnosticsState.activeTargetId,
+                        diagnosticRoute = diagnosticsState.route,
                         advancedModeEnabled = preferences.advancedModeEnabled,
-                        onRunDiagnostics = { runDiagnostics() },
-                        onCancelDiagnostics = { stopDiagnostics() },
+                        onRunDiagnostics = {
+                            diagnosticsViewModel.run(
+                                connected = backendState == VpnRunStatus.CONNECTED,
+                                socksPort = activeSocksPort
+                            )
+                        },
+                        onCancelDiagnostics = { diagnosticsViewModel.cancel() },
                         onOpenTarget = { target -> openDiagnosticTarget(target) },
                         onShareReport = {
                             scope.launch {
@@ -883,7 +761,7 @@ private fun XrayScreen(
                                     val report = DiagnosticReportSharing.collect(
                                         context = context,
                                         settings = preferences,
-                                        results = diagnosticResults.orEmpty()
+                                        results = diagnosticsState.results.orEmpty()
                                     )
                                     val file = DiagnosticReportSharing.write(context, report)
                                     DiagnosticReportSharing.shareIntent(context, file)
@@ -921,9 +799,11 @@ private fun XrayScreen(
                     onAdvanced = { screen = AppScreen.ADVANCED },
                     updateState = updateState,
                     canInstallPackages = canInstallPackages,
-                    onCheckUpdate = { checkAppUpdate() },
-                    onDownloadUpdate = { downloadAppUpdate(it) },
-                    onInstallUpdate = { installDownloadedUpdate(it) },
+                    onCheckUpdate = { updateViewModel.check() },
+                    onDownloadUpdate = { updateViewModel.download(it) },
+                    onInstallUpdate = { path ->
+                        updateViewModel.installIntentFor(path)?.let(context::startActivity)
+                    },
                     onOpenUnknownSources = {
                         context.startActivity(AppUpdateInstaller.unknownSourcesIntent(context))
                     }
