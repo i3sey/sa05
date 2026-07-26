@@ -101,6 +101,7 @@ internal fun DiagnosticsScreen(
     onRunDiagnostics: () -> Unit,
     onCancelDiagnostics: () -> Unit,
     onOpenTarget: (DiagnosticTarget) -> Unit,
+    onShareReport: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val results = diagnosticResults.orEmpty()
@@ -163,6 +164,27 @@ internal fun DiagnosticsScreen(
                             Text(if (results.isEmpty()) "Проверить подключение" else "Проверить снова")
                         }
                     }
+                }
+            }
+        }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Отчёт для поддержки", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Соберём версии, состояние компонентов, результаты проверок и " +
+                            "последние строки логов. Ссылка подписки, идентификаторы " +
+                            "профилей и адреса серверов из отчёта вырезаются.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = onShareReport,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Поделиться отчётом") }
                 }
             }
         }

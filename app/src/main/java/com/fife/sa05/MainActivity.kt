@@ -786,6 +786,22 @@ private fun XrayScreen(
                         onRunDiagnostics = { runDiagnostics() },
                         onCancelDiagnostics = { stopDiagnostics() },
                         onOpenTarget = { target -> openDiagnosticTarget(target) },
+                        onShareReport = {
+                            scope.launch {
+                                val intent = withContext(Dispatchers.IO) {
+                                    val report = DiagnosticReportSharing.collect(
+                                        context = context,
+                                        settings = preferences,
+                                        results = diagnosticResults.orEmpty()
+                                    )
+                                    val file = DiagnosticReportSharing.write(context, report)
+                                    DiagnosticReportSharing.shareIntent(context, file)
+                                }
+                                runCatching { context.startActivity(intent) }.onFailure {
+                                    message = "Не удалось открыть отправку отчёта"
+                                }
+                            }
+                        },
                         modifier = Modifier.weight(1f)
                     )
                 }

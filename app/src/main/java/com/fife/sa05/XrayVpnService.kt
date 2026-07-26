@@ -1204,13 +1204,17 @@ class XrayVpnService : VpnService() {
         scope.launch {
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { Log.i(tag, it) }
+                    lines.forEach {
+                        Log.i(tag, it)
+                        DiagnosticLog.record(tag, it)
+                    }
                 }
             } catch (e: Exception) {
                 val closedDuringStop = e is InterruptedIOException ||
                     e.message?.contains("interrupted by close", ignoreCase = true) == true
                 if (!closedDuringStop && isProcessAlive(process)) {
                     Log.w(tag, "Не удалось прочитать лог", e)
+                    DiagnosticLog.record(tag, "log reader failed: ${e.message ?: e.javaClass.simpleName}")
                 }
             }
         }
