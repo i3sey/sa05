@@ -1,5 +1,7 @@
 package com.fife.sa05
 
+import com.fife.sa05.components.VpnHeroState
+
 enum class VpnPrimaryAction {
     CONNECT,
     STOP,
@@ -20,6 +22,22 @@ data class VpnStatusPresentation(
     val primaryAction: VpnPrimaryAction,
     val secondaryActions: List<VpnSecondaryAction>
 )
+
+/**
+ * How the hero control should present a runtime status.
+ *
+ * `WAITING_FOR_NETWORK` counts as busy rather than failed: the VPN is still up and will carry
+ * on by itself once the network returns, so presenting it as a failure would invite the user to
+ * go and fix something that is not broken.
+ */
+internal fun vpnHeroState(status: VpnRunStatus): VpnHeroState = when (status) {
+    VpnRunStatus.DISCONNECTED -> VpnHeroState.OFF
+    VpnRunStatus.CONNECTED -> VpnHeroState.ON
+    VpnRunStatus.CONNECTING,
+    VpnRunStatus.RECOVERING,
+    VpnRunStatus.WAITING_FOR_NETWORK -> VpnHeroState.BUSY
+    VpnRunStatus.ERROR -> VpnHeroState.FAILED
+}
 
 /**
  * Plain-language note for a component that is degraded or dead, so a broken piece of the stack

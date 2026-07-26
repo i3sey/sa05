@@ -1,7 +1,43 @@
 package com.fife.sa05
 
+import com.fife.sa05.components.VpnHeroState
 import org.junit.Assert.assertEquals
 import org.junit.Test
+
+class VpnHeroStateTest {
+    @Test
+    fun `off only when disconnected`() {
+        assertEquals(VpnHeroState.OFF, vpnHeroState(VpnRunStatus.DISCONNECTED))
+    }
+
+    @Test
+    fun `on only when connected`() {
+        assertEquals(VpnHeroState.ON, vpnHeroState(VpnRunStatus.CONNECTED))
+    }
+
+    @Test
+    fun `working states read as busy`() {
+        listOf(
+            VpnRunStatus.CONNECTING,
+            VpnRunStatus.RECOVERING,
+            // Still up and will resume by itself; presenting it as a failure would send the
+            // user off to fix something that is not broken.
+            VpnRunStatus.WAITING_FOR_NETWORK
+        ).forEach {
+            assertEquals("$it", VpnHeroState.BUSY, vpnHeroState(it))
+        }
+    }
+
+    @Test
+    fun `only a real error reads as failed`() {
+        assertEquals(VpnHeroState.FAILED, vpnHeroState(VpnRunStatus.ERROR))
+    }
+
+    @Test
+    fun `every status maps to something`() {
+        VpnRunStatus.entries.forEach { vpnHeroState(it) }
+    }
+}
 
 class VpnStatusPresentationTest {
     @Test

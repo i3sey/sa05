@@ -71,8 +71,11 @@ import com.fife.sa05.VpnRuntimeSnapshot
 import com.fife.sa05.VpnSecondaryAction
 import com.fife.sa05.VpnStatusPresentation
 import com.fife.sa05.vpnStatusPresentation
+import androidx.compose.ui.text.style.TextAlign
 import com.fife.sa05.components.DashboardRow
 import com.fife.sa05.components.FlagBadge
+import com.fife.sa05.components.VpnHeroControl
+import com.fife.sa05.vpnHeroState
 import com.fife.sa05.parseServerRemark
 import com.fife.sa05.ProfileExplainer
 import com.fife.sa05.ProfilePing
@@ -395,123 +398,78 @@ private fun VpnStatusCard(
     onDiagnostics: () -> Unit
 ) {
     val primaryAction = presentation.primaryAction
-    val title = presentation.title
-    val container = when (runtime.status) {
-        VpnRunStatus.CONNECTED -> MaterialTheme.colorScheme.primaryContainer
-        VpnRunStatus.ERROR -> MaterialTheme.colorScheme.errorContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
+    val haptics = LocalHapticFeedback.current
+    // Reaching a terminal state is worth a nudge; intermediate ticks are not.
+    LaunchedEffect(runtime.status) {
+        when (runtime.status) {
+            VpnRunStatus.CONNECTED -> haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            VpnRunStatus.ERROR -> haptics.performHapticFeedback(HapticFeedbackType.Reject)
+            else -> Unit
+        }
     }
-    val content = when (runtime.status) {
-        VpnRunStatus.CONNECTED -> MaterialTheme.colorScheme.onPrimaryContainer
-        VpnRunStatus.ERROR -> MaterialTheme.colorScheme.onErrorContainer
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = container)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                if (runtime.status == VpnRunStatus.CONNECTING ||
-                    runtime.status == VpnRunStatus.RECOVERING
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.height(32.dp), color = content)
+        VpnHeroControl(
+            state = vpnHeroState(runtime.status),
+            actionLabel = when (primaryAction) {
+                VpnPrimaryAction.CONNECT -> "Подключить VPN"
+                VpnPrimaryAction.STOP -> "Отключить VPN"
+                VpnPrimaryAction.RETRY -> "Повторить подключение"
+                VpnPrimaryAction.OPEN_SUBSCRIPTION -> "Настроить подписку"
+            },
+            // The circle's colour and its label already say what state the VPN is in, so
+            // prepending the title here only repeated it: "VPN включён · … · VPN включён, но…".
+            statusDescription = description.ifBlank { presentation.title },
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                if (primaryAction == VpnPrimaryAction.OPEN_SUBSCRIPTION) {
+                    onOpenSubscriptionSettings()
                 } else {
-                    Icon(
-                        if (runtime.status == VpnRunStatus.CONNECTED) {
-                            painterResource(R.drawable.ic_check_circle)
-                        } else {
-                            painterResource(R.drawable.ic_power)
-                        },
-                        contentDescription = null,
-                        tint = content
-                    )
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.headlineSmall, color = content)
-                    Text(description, style = MaterialTheme.typography.bodyMedium, color = content)
-                    if (runtime.status == VpnRunStatus.CONNECTED &&
-                        runtime.connectedAtMillis > 0L
-                    ) {
-                        VpnUptime(
-                            connectedAtMillis = runtime.connectedAtMillis,
-                            traffic = traffic,
-                            color = content
-                        )
-                    }
+                    onToggleVpn()
                 }
             }
-            componentTrouble(runtime.components)?.let { trouble ->
-                Text(trouble, style = MaterialTheme.typography.bodyMedium, color = content)
-            }
-            if (advancedModeEnabled && runtime.components.isNotEmpty()) {
-                ComponentChips(runtime.components)
-            }
-            val interaction = remember { MutableInteractionSource() }
-            val haptics = LocalHapticFeedback.current
-            // Reaching a terminal state is worth a nudge; intermediate ticks are not.
-            LaunchedEffect(runtime.status) {
-                when (runtime.status) {
-                    VpnRunStatus.CONNECTED ->
-                        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                    VpnRunStatus.ERROR ->
-                        haptics.performHapticFeedback(HapticFeedbackType.Reject)
-                    else -> Unit
-                }
-            }
-            Button(
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-                    if (primaryAction == VpnPrimaryAction.OPEN_SUBSCRIPTION) {
-                        onOpenSubscriptionSettings()
-                    } else {
-                        onToggleVpn()
-                    }
+        )
+        if (runtime.status == VpnRunStatus.CONNECTED && runtime.connectedAtMillis > 0L) {
+            VpnUptime(
+                connectedAtMillis = runtime.connectedAtMillis,
+                traffic = traffic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        componentTrouble(runtime.components)?.let { trouble ->
+            Text(
+                trouble,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+        }
+        if (advancedModeEnabled && runtime.components.isNotEmpty()) {
+            ComponentChips(runtime.components)
+        }
+        presentation.secondaryActions.forEach { action ->
+            OutlinedButton(
+                onClick = when (action) {
+                    VpnSecondaryAction.NETWORK_SETTINGS -> onOpenNetworkSettings
+                    VpnSecondaryAction.CHANGE_PROFILE,
+                    VpnSecondaryAction.CHANGE_STRATEGY -> onChangeProfile
+                    VpnSecondaryAction.DIAGNOSTICS -> onDiagnostics
                 },
-                interactionSource = interaction,
-                modifier = Modifier.fillMaxWidth().height(56.dp).pressScale(interaction)
+                modifier = Modifier.fillMaxWidth()
             ) {
-                val motion = motionEnabled()
-                AnimatedContent(
-                    targetState = primaryAction,
-                    transitionSpec = { fadeTransform(motion) },
-                    label = "vpnPrimaryAction"
-                ) { action ->
-                    Text(
-                        when (action) {
-                            VpnPrimaryAction.CONNECT -> "Подключить VPN"
-                            VpnPrimaryAction.STOP -> "Отключить VPN"
-                            VpnPrimaryAction.RETRY -> "Повторить подключение"
-                            VpnPrimaryAction.OPEN_SUBSCRIPTION -> "Настроить подписку"
-                        }
-                    )
-                }
-            }
-            presentation.secondaryActions.forEach { action ->
-                OutlinedButton(
-                    onClick = when (action) {
-                        VpnSecondaryAction.NETWORK_SETTINGS -> onOpenNetworkSettings
-                        VpnSecondaryAction.CHANGE_PROFILE,
-                        VpnSecondaryAction.CHANGE_STRATEGY -> onChangeProfile
-                        VpnSecondaryAction.DIAGNOSTICS -> onDiagnostics
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        when (action) {
-                            VpnSecondaryAction.NETWORK_SETTINGS -> "Настройки сети"
-                            VpnSecondaryAction.CHANGE_PROFILE -> "Выбрать другой сервер"
-                            VpnSecondaryAction.CHANGE_STRATEGY -> "Сменить стратегию обхода"
-                            VpnSecondaryAction.DIAGNOSTICS -> "Открыть проверку"
-                        }
-                    )
-                }
+                Text(
+                    when (action) {
+                        VpnSecondaryAction.NETWORK_SETTINGS -> "Настройки сети"
+                        VpnSecondaryAction.CHANGE_PROFILE -> "Выбрать другой сервер"
+                        VpnSecondaryAction.CHANGE_STRATEGY -> "Сменить стратегию обхода"
+                        VpnSecondaryAction.DIAGNOSTICS -> "Открыть проверку"
+                    }
+                )
             }
         }
     }
