@@ -54,13 +54,13 @@ private fun ConnectionSummaryStatus.color() = when (this) {
 }
 
 private fun diagnosticResultText(result: DiagnosticResult?): String = when {
-    result == null -> "Ожидает проверки"
+    result == null -> "Ещё не проверяли"
     result.status == DiagnosticStatus.SUCCESS ->
         listOfNotNull(result.statusCode?.toString(), result.delayMs?.let { "$it мс" })
             .joinToString(" · ")
             .ifBlank { "Успех" }
     result.error.isNotBlank() -> result.error
-    result.status == DiagnosticStatus.INCONCLUSIVE -> "Неоднозначно"
+    result.status == DiagnosticStatus.INCONCLUSIVE -> "Непонятно"
     else -> "Ошибка"
 }
 
@@ -177,9 +177,9 @@ internal fun DiagnosticsScreen(
                 ) {
                     Text("Отчёт для поддержки", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Соберём версии, состояние компонентов, результаты проверок и " +
-                            "последние строки логов. Ссылка подписки, идентификаторы " +
-                            "профилей и адреса серверов из отчёта вырезаются.",
+                        "Соберём версии, состояние VPN и результаты проверок. Ссылка " +
+                            "подписки, названия профилей и адреса серверов из отчёта " +
+                            "вырезаются.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -193,21 +193,21 @@ internal fun DiagnosticsScreen(
         item {
             SummaryCard(
                 title = "Интернет",
-                description = "Google или Ya.ru",
+                description = "Открываются ли обычные сайты",
                 status = summary.internet
             )
         }
         item {
             SummaryCard(
                 title = "Сайты с ограничениями",
-                description = "Kinozal и NNMClub",
+                description = "Открываются ли заблокированные сайты",
                 status = summary.restrictedSites
             )
         }
         item {
             SummaryCard(
                 title = "Telegram",
-                description = "Проверяем отдельно от сайтов",
+                description = "Может быть закрыт отдельно от сайтов",
                 status = summary.telegram
             )
         }
@@ -263,7 +263,7 @@ private fun TechnicalDiagnostics(
                     Column(Modifier.weight(1f)) {
                         Text(target.label, style = MaterialTheme.typography.titleSmall)
                         Text(
-                            if (active) "Запрос выполняется" else diagnosticResultText(result),
+                            if (active) "Проверяем…" else diagnosticResultText(result),
                             // Status code and latency; a column of these should line up.
                             style = MaterialTheme.typography.bodySmall.tabularFigures(),
                             color = when {

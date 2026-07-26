@@ -3,10 +3,27 @@ package com.fife.sa05
 internal fun effectiveVpnBackend(settings: XraySettings): VpnBackend =
     if (settings.advancedModeEnabled) settings.vpnBackend else VpnBackend.PROXY_ONLY
 
-enum class VpnBackend(val title: String) {
-    FULL_AUTO("[BETA] Фулл авто"),
-    LOCAL_BYPASS("[BETA] Локальный обход"),
-    PROXY_ONLY("Только прокси");
+/**
+ * Names say what the mode does with your traffic; the description says what that costs.
+ *
+ * "Фулл авто" and "Только прокси" described the implementation, so the picker offered three
+ * labels and no way to tell which one to want.
+ */
+enum class VpnBackend(val title: String, val description: String) {
+    FULL_AUTO(
+        "Сервер и обход на телефоне [BETA]",
+        "Всё идёт через сервер подписки, а YouTube и Telegram — ещё и через обход на " +
+            "телефоне. Самый полный режим и самый требовательный к батарее."
+    ),
+    LOCAL_BYPASS(
+        "Только обход на телефоне [BETA]",
+        "Сервер подписки не используется: блокировки обходятся прямо на телефоне. " +
+            "Быстрее и не тратит трафик подписки, но помогает не везде."
+    ),
+    PROXY_ONLY(
+        "Через сервер подписки",
+        "Весь трафик идёт через выбранный сервер. Самый предсказуемый режим."
+    );
 
     val usesTelegram: Boolean
         get() = this != PROXY_ONLY

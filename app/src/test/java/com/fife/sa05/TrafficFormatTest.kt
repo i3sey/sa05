@@ -102,7 +102,7 @@ class ComponentTroubleTest {
         )
 
         assertEquals(
-            "Локальный обход не взлетел: YouTube идёт через выбранный сервер",
+            "Обход на телефоне не заработал — YouTube идёт через сервер",
             componentTrouble(components)
         )
     }
@@ -124,13 +124,13 @@ class ComponentTroubleTest {
             componentTrouble(listOf(snapshot(VpnRuntimeComponent.XRAY, VpnComponentState.FAILED)))
         )
         assertEquals(
-            "Перенос трафика в туннель остановился, восстанавливаем",
+            "Туннель потерял связь, восстанавливаем",
             componentTrouble(
                 listOf(snapshot(VpnRuntimeComponent.TUN2SOCKS, VpnComponentState.FAILED))
             )
         )
         assertEquals(
-            "Локальный обход остановился, восстанавливаем",
+            "Обход на телефоне остановился, восстанавливаем",
             componentTrouble(listOf(snapshot(VpnRuntimeComponent.BYEDPI, VpnComponentState.FAILED)))
         )
         assertEquals(

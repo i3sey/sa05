@@ -207,7 +207,7 @@ internal fun ColumnScope.SettingsScreen(
                             Column(Modifier.weight(1f)) {
                                 Text("Показывать технические настройки")
                                 Text(
-                                    "Режимы обхода, ByeDPI, Cloudflare и ping хостов",
+                                    "Выбор режима, раздача по Wi-Fi, Telegram",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -221,7 +221,7 @@ internal fun ColumnScope.SettingsScreen(
                             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                             DashboardRow(
                                 title = "Расширенные настройки",
-                                subtitle = "Режимы, обход и Telegram",
+                                subtitle = "Режим VPN, раздача, Telegram",
                                 onClick = onAdvanced
                             )
                         }
@@ -246,9 +246,9 @@ internal fun ColumnScope.SettingsScreen(
                             )
                             Text(
                                 if (dynamicColor) {
-                                    "Приложение подстраивается под обои. Android 12 и новее."
+                                    "Цвета берутся из ваших обоев"
                                 } else {
-                                    "Используется базовая палитра Material."
+                                    "Стандартные цвета Material"
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -306,14 +306,29 @@ internal fun ColumnScope.AdvancedSettingsScreen(
             text = {
                 Column {
                     VpnBackend.entries.forEach { backend ->
-                        TextButton(
-                            onClick = {
-                                onSelectBackend(backend)
-                                backendPickerVisible = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickableScale {
+                                    onSelectBackend(backend)
+                                    backendPickerVisible = false
+                                }
+                                .padding(vertical = Space.Item)
                         ) {
-                            Text(backend.title, modifier = Modifier.fillMaxWidth())
+                            Text(
+                                backend.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (backend == selectedBackend) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                            Text(
+                                backend.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -388,7 +403,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         DashboardRow(
                             title = "Хосты",
-                            subtitle = "Проверка outbound-подключений",
+                            subtitle = "Замерить задержку до серверов профиля",
                             onClick = onHosts
                         )
                     }
@@ -414,8 +429,8 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                                         "блокировки по IPv6 не обходятся. Включайте только " +
                                         "если без этого сеть не работает."
                                 } else {
-                                    "IPv6 закрыт туннелем, приложения переходят на IPv4. " +
-                                        "Включите, если у оператора сеть только на IPv6."
+                                    "IPv6 закрыт туннелем — приложения переходят на IPv4. " +
+                                        "Включайте, только если без этого сеть не работает."
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (allowIpv6Bypass) {
@@ -463,19 +478,17 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         }
                         if (lanSharingEnabled) {
                             Text(
-                                "Это единственный вход в туннель из локальной сети, и он " +
-                                    "закрыт паролем. Всё остальное приложение слушает только " +
-                                    "внутри телефона. В публичном Wi-Fi всё равно не включайте: " +
-                                    "трафик гостей идёт через вашу подписку и расходует ваш " +
-                                    "трафик и батарею.",
+                                "Единственный вход снаружи, и он закрыт паролем — всё остальное " +
+                                    "доступно только внутри телефона. В публичном Wi-Fi не " +
+                                    "включайте: гости тратят вашу подписку и батарею.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error
                             )
                             HorizontalDivider()
                             if (lanShareUri == null || lanShareAddress == null) {
                                 Text(
-                                    "Локальная сеть не найдена. Подключитесь к Wi-Fi или " +
-                                        "включите точку доступа — адрес появится здесь.",
+                                    "Нет локальной сети. Подключитесь к Wi-Fi или включите " +
+                                        "точку доступа — адрес появится здесь.",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             } else {
@@ -528,12 +541,11 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         )
                         Text(
                             if (strategyMemoryCount == 0) {
-                                "Приложение ещё не запоминало, какой обход работает в ваших " +
-                                    "сетях. Записи появятся после успешного автоподбора."
+                                "Пока пусто. Записи появятся, когда автоподбор найдёт " +
+                                    "рабочий обход в вашей сети."
                             } else {
-                                "Записей: $strategyMemoryCount. Привязаны к оператору и набору " +
-                                    "блокировок, а не к конкретному подключению, поэтому " +
-                                    "переживают переподключение."
+                                "Записей: $strategyMemoryCount. Привязаны к оператору, а не к конкретному " +
+                                    "подключению, поэтому переживают смену сети."
                             },
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -565,8 +577,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                     ) {
                         Text("Локальный обход", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Свои параметры используются только при выборе стратегии " +
-                                "«Свои параметры».",
+                            "Применяются, только если выше выбрана стратегия «Свои параметры».",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         OutlinedTextField(
@@ -597,7 +608,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                             Column(Modifier.weight(1f)) {
                                 Text("Cloudflare-маршрут")
                                 Text(
-                                    "WebSocket-маршрут к Telegram DC",
+                                    "Обходной путь к серверам Telegram",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -661,7 +672,7 @@ internal fun HostPingList(
 ) {
     val parsed = remember(config) { runCatching { XrayConfig.extractHosts(config) } }
     Column(modifier.padding(top = 8.dp)) {
-        Text("Проверка выполняется через протокол и настройки выбранного outbound.")
+        Text("Замер идёт через настройки выбранного сервера: протокол, шифрование, транспорт.")
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         val hosts = parsed.getOrNull()
         when {
@@ -669,7 +680,7 @@ internal fun HostPingList(
                 parsed.exceptionOrNull()?.message ?: "Некорректный JSON",
                 color = MaterialTheme.colorScheme.error
             )
-            hosts.isNullOrEmpty() -> Text("Прокси-хосты в outbounds не найдены.")
+            hosts.isNullOrEmpty() -> Text("В этом профиле нет серверов для замера.")
             else -> LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)

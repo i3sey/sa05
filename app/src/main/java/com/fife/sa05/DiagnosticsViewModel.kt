@@ -54,9 +54,9 @@ internal class DiagnosticsViewModel(application: Application) : AndroidViewModel
             running = true,
             activeTargetId = ConnectivityDiagnostics.targets.first().id,
             route = if (connected) {
-                "backend; TUN активен · " + runtime.backend.title
+                "через VPN · " + runtime.backend.title
             } else {
-                "прямое соединение"
+                "напрямую, без VPN"
             }
         )
         job = viewModelScope.launch {

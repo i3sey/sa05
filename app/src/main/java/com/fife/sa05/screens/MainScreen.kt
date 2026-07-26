@@ -89,11 +89,11 @@ import com.fife.sa05.ui.theme.pressScale
 import com.fife.sa05.ui.theme.tabularFigures
 
 private fun ConnectionCheckState.simpleText(): String = when (this) {
-    ConnectionCheckState.Idle -> "Проверка доступна после подключения"
-    ConnectionCheckState.Running -> "Проверяем доступ через VPN…"
+    ConnectionCheckState.Idle -> "Доступна после подключения VPN"
+    ConnectionCheckState.Running -> "Проверяем связь…"
     is ConnectionCheckState.Passed -> result.delayMs?.let { "Пинг Google: $it мс" }
         ?: "Интернет доступен"
-    is ConnectionCheckState.Failed -> "Интернет ещё не подтверждён"
+    is ConnectionCheckState.Failed -> "Связь не подтвердилась — откройте проверку"
 }
 
 private fun ConnectionCheckState.pingText(): String? = when (this) {
@@ -110,9 +110,9 @@ private fun TelegramProxyRuntimeSnapshot.title(): String = when (status) {
 
 private fun TelegramProxyRuntimeSnapshot.description(): String = when (status) {
     TelegramProxyRunStatus.STOPPED ->
-        "Откроем Telegram через локальный прокси, без VPN и подписки"
-    TelegramProxyRunStatus.STARTING -> message.ifBlank { "Запускаем локальный прокси" }
-    TelegramProxyRunStatus.RUNNING -> "Работает локальный Telegram Proxy"
+        "Откроем Telegram даже без VPN и подписки"
+    TelegramProxyRunStatus.STARTING -> message.ifBlank { "Запускаем прокси для Telegram" }
+    TelegramProxyRunStatus.RUNNING -> "Telegram идёт через локальный прокси"
     TelegramProxyRunStatus.ERROR -> message.ifBlank { "Попробуйте ещё раз" }
 }
 
@@ -160,7 +160,7 @@ internal fun ColumnScope.MainScreen(
             if (subscription.profiles.isEmpty()) {
                 // An empty sheet reads as a bug; say what happened and what to do about it.
                 Text(
-                    "Подписка не вернула ни одного профиля. Обновите её в настройках или " +
+                    "Провайдер не прислал ни одного сервера. Обновите подписку в настройках или " +
                         "проверьте ссылку у провайдера.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -265,7 +265,7 @@ internal fun ColumnScope.MainScreen(
                     RowDivider()
                     DashboardRow(
                         title = "Исключения приложений",
-                        subtitle = "Приложения с прямым доступом",
+                        subtitle = "Пойдут в обход VPN, напрямую",
                         onClick = onExclusions
                     )
                     RowDivider()
@@ -278,7 +278,7 @@ internal fun ColumnScope.MainScreen(
                         connectionCheck is ConnectionCheckState.Failed
                     ) {
                         Text(
-                            "Откройте проверку, чтобы узнать, что именно не работает.",
+                            "Откроем список сайтов и покажем, что именно не отвечает.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(

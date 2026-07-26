@@ -260,7 +260,7 @@ class XrayVpnService : VpnService() {
                 if (currentNetwork() == null) {
                     publishRuntime(
                         status = VpnRunStatus.WAITING_FOR_NETWORK,
-                        message = "Сеть пропала во время запуска; ждём восстановления",
+                        message = "Сеть пропала во время подключения, ждём её возвращения",
                         failureKind = VpnFailureKind.NETWORK,
                         recoveryAttempt = recoveryAttempt ?: 0,
                         components = componentSnapshots(failed = true)
@@ -350,10 +350,10 @@ class XrayVpnService : VpnService() {
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "Локальный маршрут готов"
                 )
-                verificationMessage = "Локальный маршрут проверен"
+                verificationMessage = "Обход проверен, сайты открываются"
             } else {
                 _zapretAutoProgress.value = ZapretAutoProgress(
-                    message = "Строгая проверка не прошла, используется лучший пресет"
+                    message = "Полностью проверить не удалось, включили лучший из найденных вариантов"
                 )
                 verificationMessage =
                     "Строгая проверка не прошла: лучший результат " +
@@ -513,7 +513,7 @@ class XrayVpnService : VpnService() {
             }
         }
         val best = ZapretAutoSelection.fallback(scores)
-            ?: error("ByeDPI не запустился ни с одной стратегией")
+            ?: error("Обход на телефоне не запустился ни с одной стратегией")
         prepareZapretCandidate(best.first)
         XrayPreferences.saveZapretAutoCache(
             this,
@@ -585,7 +585,7 @@ class XrayVpnService : VpnService() {
         val socksPort = startXrayBackend(fullAuto = false)
         runningLabel = "[BETA] ${selectedProfileLabel()} · Xray · Telegram"
         _zapretAutoProgress.value = ZapretAutoProgress(
-            message = "VPN запущен через Xray, подбираем локальный обход"
+            message = "VPN уже работает через сервер, подбираем обход на телефоне"
         )
         verificationMessage =
             "VPN уже работает через Xray; YouTube-обход подбирается в фоне"
@@ -755,7 +755,7 @@ class XrayVpnService : VpnService() {
     }
 
     private fun verifyRunningTunnel() {
-        verificationMessage = "Проверяем полный VPN-маршрут..."
+        verificationMessage = "Проверяем, открываются ли сайты…"
         scope.launch {
             delay(250)
             val results = ConnectivityDiagnostics().runSocks(
@@ -772,7 +772,7 @@ class XrayVpnService : VpnService() {
             ) {
                 pingMs?.let { "Пинг: $it мс" } ?: "Подключение проверено"
             } else {
-                "VPN включён, но обход ограничений не подтверждён"
+                "Сайты с ограничениями пока не открылись — попробуйте другой сервер"
             }
             val runtime = VpnRuntimeState.read(this@XrayVpnService)
             if (runtime.status == VpnRunStatus.CONNECTED) {
@@ -1022,7 +1022,7 @@ class XrayVpnService : VpnService() {
         // belong to the full start path.
         val dead = deadSupervisedRoles()
         if (!tunController.established || dead.isEmpty()) {
-            return fullRestart(runtime, "Один из компонентов VPN остановился")
+            return fullRestart(runtime, "Часть VPN остановилась, восстанавливаем")
         }
         val role = dead.first()
         val backoff = supervisor.nextBackoffMs(role)

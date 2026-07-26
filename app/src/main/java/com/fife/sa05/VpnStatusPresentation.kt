@@ -49,7 +49,7 @@ internal fun componentTrouble(components: List<VpnComponentSnapshot>): String? {
     fun state(component: VpnRuntimeComponent) = byComponent[component]?.state
 
     if (state(VpnRuntimeComponent.BYEDPI) == VpnComponentState.FALLBACK) {
-        return "Локальный обход не взлетел: YouTube идёт через выбранный сервер"
+        return "Обход на телефоне не заработал — YouTube идёт через сервер"
     }
     val failed = components.filter { it.state == VpnComponentState.FAILED }
     if (failed.isEmpty()) return null
@@ -57,14 +57,14 @@ internal fun componentTrouble(components: List<VpnComponentSnapshot>): String? {
         failed.any { it.component == VpnRuntimeComponent.TUN } ->
             "Туннель закрылся, перезапускаем VPN"
         failed.any { it.component == VpnRuntimeComponent.TUN2SOCKS } ->
-            "Перенос трафика в туннель остановился, восстанавливаем"
+            "Туннель потерял связь, восстанавливаем"
         failed.any { it.component == VpnRuntimeComponent.XRAY } ->
             "Соединение с сервером оборвалось, восстанавливаем"
         failed.any { it.component == VpnRuntimeComponent.BYEDPI } ->
-            "Локальный обход остановился, восстанавливаем"
+            "Обход на телефоне остановился, восстанавливаем"
         failed.any { it.component == VpnRuntimeComponent.TELEGRAM } ->
             "Telegram Proxy остановился"
-        else -> "Один из компонентов VPN остановился"
+        else -> "Часть VPN остановилась, восстанавливаем"
     }
 }
 
@@ -73,7 +73,7 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
     return when (snapshot.status) {
         VpnRunStatus.DISCONNECTED -> VpnStatusPresentation(
             title = "VPN выключен",
-            description = "Выберите сервер и подключите VPN",
+            description = "Нажмите, чтобы весь трафик пошёл через сервер",
             primaryAction = VpnPrimaryAction.CONNECT,
             secondaryActions = emptyList()
         )
@@ -94,13 +94,13 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
         )
         VpnRunStatus.RECOVERING -> VpnStatusPresentation(
             title = "Восстанавливаем VPN",
-            description = snapshot.message.ifBlank { "Проверяем маршрут после смены сети" },
+            description = snapshot.message.ifBlank { "Сеть сменилась, проверяем связь" },
             primaryAction = VpnPrimaryAction.STOP,
             secondaryActions = emptyList()
         )
         VpnRunStatus.WAITING_FOR_NETWORK -> VpnStatusPresentation(
             title = "Нет подключения к сети",
-            description = snapshot.message.ifBlank { "VPN продолжит работу, когда сеть появится" },
+            description = snapshot.message.ifBlank { "Подключимся сами, как только сеть вернётся" },
             primaryAction = VpnPrimaryAction.STOP,
             secondaryActions = listOf(VpnSecondaryAction.NETWORK_SETTINGS)
         )
@@ -110,7 +110,7 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
             } else {
                 "Не удалось подключить VPN"
             },
-            description = snapshot.message.ifBlank { "Повторите попытку или откройте проверку" },
+            description = snapshot.message.ifBlank { "Попробуйте ещё раз или откройте проверку" },
             primaryAction = if (snapshot.failureKind == VpnFailureKind.AUTHORIZATION) {
                 VpnPrimaryAction.OPEN_SUBSCRIPTION
             } else {
