@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-    echo "Usage: $0 <apk> [abis]" >&2
-    echo "  abis: comma-separated, default arm64-v8a. The dev APK also carries x86_64." >&2
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <apk>" >&2
     exit 2
 fi
 
 apk=$1
-abis=${2:-arm64-v8a}
 if [[ ! -f "$apk" ]]; then
     echo "APK not found: $apk" >&2
     exit 2
@@ -48,5 +46,5 @@ if ! "$zipalign_bin" -c -P 16 -v 4 "$apk" >"$zipalign_log" 2>&1; then
 fi
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-python3 "$script_dir/check-elf-16kb.py" --apk "$apk" --abis "$abis"
-echo "PASS $apk: ZIP alignment and all $abis ELF/RELRO checks passed"
+python3 "$script_dir/check-elf-16kb.py" --apk "$apk"
+echo "PASS $apk: ZIP alignment and all arm64 ELF/RELRO checks passed"

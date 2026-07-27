@@ -65,16 +65,16 @@ internal fun connectionCheckSummary(
     }
     val recommendation = when {
         internet == ConnectionSummaryStatus.UNAVAILABLE ->
-            "Интернета нет. Проверьте связь и запустите проверку снова."
+            "Проверьте интернет и повторите проверку."
         restrictedSites == ConnectionSummaryStatus.UNAVAILABLE ->
-            "Обычные сайты открываются, а заблокированные — нет. Попробуйте другой сервер."
+            "Сайты с ограничениями пока не открылись. Попробуйте другой сервер."
         telegram == ConnectionSummaryStatus.UNAVAILABLE ->
-            "Telegram не открылся. Включите на главном экране режим «Только Telegram»."
+            "Для Telegram можно включить режим «Только Telegram»."
         internet == ConnectionSummaryStatus.AVAILABLE &&
             restrictedSites == ConnectionSummaryStatus.AVAILABLE &&
             telegram == ConnectionSummaryStatus.AVAILABLE -> "Подключение работает."
         running -> "Проверяем подключение…"
-        else -> "Проверим, открываются ли обычные и заблокированные сайты."
+        else -> "Запустите проверку, чтобы увидеть состояние подключения."
     }
     return ConnectionCheckSummary(internet, restrictedSites, telegram, recommendation)
 }

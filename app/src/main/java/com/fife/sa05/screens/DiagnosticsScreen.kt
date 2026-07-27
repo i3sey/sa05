@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -35,10 +34,7 @@ import com.fife.sa05.DiagnosticResult
 import com.fife.sa05.DiagnosticStatus
 import com.fife.sa05.DiagnosticTarget
 import com.fife.sa05.connectionCheckSummary
-import com.fife.sa05.detectWhitelist
-import com.fife.sa05.ui.theme.Space
 import com.fife.sa05.ui.theme.motionTween
-import com.fife.sa05.ui.theme.tabularFigures
 
 private fun ConnectionSummaryStatus.label(): String = when (this) {
     ConnectionSummaryStatus.NOT_CHECKED -> "Не проверено"
@@ -56,13 +52,13 @@ private fun ConnectionSummaryStatus.color() = when (this) {
 }
 
 private fun diagnosticResultText(result: DiagnosticResult?): String = when {
-    result == null -> "Ещё не проверяли"
+    result == null -> "Ожидает проверки"
     result.status == DiagnosticStatus.SUCCESS ->
         listOfNotNull(result.statusCode?.toString(), result.delayMs?.let { "$it мс" })
             .joinToString(" · ")
             .ifBlank { "Успех" }
     result.error.isNotBlank() -> result.error
-    result.status == DiagnosticStatus.INCONCLUSIVE -> "Непонятно"
+    result.status == DiagnosticStatus.INCONCLUSIVE -> "Неоднозначно"
     else -> "Ошибка"
 }
 
@@ -105,9 +101,6 @@ internal fun DiagnosticsScreen(
     onRunDiagnostics: () -> Unit,
     onCancelDiagnostics: () -> Unit,
     onOpenTarget: (DiagnosticTarget) -> Unit,
-    onShareReport: () -> Unit,
-    whitelistBypassProfileName: String?,
-    onSwitchToWhitelistBypass: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val results = diagnosticResults.orEmpty()
@@ -115,20 +108,19 @@ internal fun DiagnosticsScreen(
         connectionCheckSummary(results, diagnosticRunning)
     }
     var showTechnicalDetails by remember { mutableStateOf(false) }
-    val whitelistSuspected = remember(results) { detectWhitelist(results).suspected }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(Space.Item),
-        contentPadding = PaddingValues(bottom = Space.ScrollBottom)
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 28.dp)
     ) {
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    Modifier.padding(Space.Content),
-                    verticalArrangement = Arrangement.spacedBy(Space.Item)
+                    Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text("Проверка подключения", style = MaterialTheme.typography.titleMedium)
+                    Text("Проверка подключения", style = MaterialTheme.typography.titleLarge)
                     Text(
                         summary.recommendation,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -136,7 +128,7 @@ internal fun DiagnosticsScreen(
                     if (diagnosticRunning) {
                         Text(
                             "Проверено ${results.size} из ${ConnectivityDiagnostics.targets.size}",
-                            style = MaterialTheme.typography.labelLarge.tabularFigures()
+                            style = MaterialTheme.typography.labelLarge
                         )
                         val progress by animateFloatAsState(
                             targetValue = results.size.toFloat() /
@@ -174,78 +166,24 @@ internal fun DiagnosticsScreen(
                 }
             }
         }
-        if (whitelistSuspected && whitelistBypassProfileName != null) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                ) {
-                    Column(
-                        Modifier.padding(Space.Content),
-                        verticalArrangement = Arrangement.spacedBy(Space.Tight)
-                    ) {
-                        Text(
-                            "Похоже, оператор включил белый список",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            "Российские сервисы открываются, а всё остальное — нет. Обычные " +
-                                "серверы в такой сети недоступны, но в вашей подписке есть " +
-                                "профиль, рассчитанный на этот случай.",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Button(
-                            onClick = onSwitchToWhitelistBypass,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Перейти на «$whitelistBypassProfileName»")
-                        }
-                    }
-                }
-            }
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    Modifier.padding(Space.Content),
-                    verticalArrangement = Arrangement.spacedBy(Space.Tight)
-                ) {
-                    Text("Отчёт для поддержки", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Соберём версии, состояние VPN и результаты проверок. Ссылка " +
-                            "подписки, названия профилей и адреса серверов из отчёта " +
-                            "вырезаются.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedButton(
-                        onClick = onShareReport,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Поделиться отчётом") }
-                }
-            }
-        }
         item {
             SummaryCard(
                 title = "Интернет",
-                description = "Открываются ли обычные сайты",
+                description = "Google или Ya.ru",
                 status = summary.internet
             )
         }
         item {
             SummaryCard(
                 title = "Сайты с ограничениями",
-                description = "Открываются ли заблокированные сайты",
+                description = "Kinozal и NNMClub",
                 status = summary.restrictedSites
             )
         }
         item {
             SummaryCard(
                 title = "Telegram",
-                description = "Может быть закрыт отдельно от сайтов",
+                description = "Проверяем отдельно от сайтов",
                 status = summary.telegram
             )
         }
@@ -301,9 +239,8 @@ private fun TechnicalDiagnostics(
                     Column(Modifier.weight(1f)) {
                         Text(target.label, style = MaterialTheme.typography.titleSmall)
                         Text(
-                            if (active) "Проверяем…" else diagnosticResultText(result),
-                            // Status code and latency; a column of these should line up.
-                            style = MaterialTheme.typography.bodySmall.tabularFigures(),
+                            if (active) "Запрос выполняется" else diagnosticResultText(result),
+                            style = MaterialTheme.typography.bodySmall,
                             color = when {
                                 active -> MaterialTheme.colorScheme.tertiary
                                 result?.status == DiagnosticStatus.FAILED -> MaterialTheme.colorScheme.error

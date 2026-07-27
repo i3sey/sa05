@@ -14,7 +14,3 @@
 .cxx
 local.properties
 sa05-release.jks
-# x86_64 native executables exist only so the dev build runs on an emulator; they never
-# ship. Build them with `scripts/build-native.sh x86_64` instead of carrying 41 MB in
-# history forever. The arm64-v8a set is tracked because it is what gets released.
-/app/src/main/jniLibs/x86_64/

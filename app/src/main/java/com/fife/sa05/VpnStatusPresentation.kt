@@ -1,7 +1,5 @@
 package com.fife.sa05
 
-import com.fife.sa05.components.VpnHeroState
-
 enum class VpnPrimaryAction {
     CONNECT,
     STOP,
@@ -23,57 +21,12 @@ data class VpnStatusPresentation(
     val secondaryActions: List<VpnSecondaryAction>
 )
 
-/**
- * How the hero control should present a runtime status.
- *
- * `WAITING_FOR_NETWORK` counts as busy rather than failed: the VPN is still up and will carry
- * on by itself once the network returns, so presenting it as a failure would invite the user to
- * go and fix something that is not broken.
- */
-internal fun vpnHeroState(status: VpnRunStatus): VpnHeroState = when (status) {
-    VpnRunStatus.DISCONNECTED -> VpnHeroState.OFF
-    VpnRunStatus.CONNECTED -> VpnHeroState.ON
-    VpnRunStatus.CONNECTING,
-    VpnRunStatus.RECOVERING,
-    VpnRunStatus.WAITING_FOR_NETWORK -> VpnHeroState.BUSY
-    VpnRunStatus.ERROR -> VpnHeroState.FAILED
-}
-
-/**
- * Plain-language note for a component that is degraded or dead, so a broken piece of the stack
- * is visible without making the user read "tun2socks". Returns null while everything is fine —
- * healthy components are not worth screen space.
- */
-internal fun componentTrouble(components: List<VpnComponentSnapshot>): String? {
-    val byComponent = components.associateBy { it.component }
-    fun state(component: VpnRuntimeComponent) = byComponent[component]?.state
-
-    if (state(VpnRuntimeComponent.BYEDPI) == VpnComponentState.FALLBACK) {
-        return "Обход на телефоне не заработал — YouTube идёт через сервер"
-    }
-    val failed = components.filter { it.state == VpnComponentState.FAILED }
-    if (failed.isEmpty()) return null
-    return when {
-        failed.any { it.component == VpnRuntimeComponent.TUN } ->
-            "Туннель закрылся, перезапускаем VPN"
-        failed.any { it.component == VpnRuntimeComponent.TUN2SOCKS } ->
-            "Туннель потерял связь, восстанавливаем"
-        failed.any { it.component == VpnRuntimeComponent.XRAY } ->
-            "Соединение с сервером оборвалось, восстанавливаем"
-        failed.any { it.component == VpnRuntimeComponent.BYEDPI } ->
-            "Обход на телефоне остановился, восстанавливаем"
-        failed.any { it.component == VpnRuntimeComponent.TELEGRAM } ->
-            "Telegram Proxy остановился"
-        else -> "Часть VPN остановилась, восстанавливаем"
-    }
-}
-
 fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
     val profileDescription = snapshot.profileName.ifBlank { snapshot.backend.title }
     return when (snapshot.status) {
         VpnRunStatus.DISCONNECTED -> VpnStatusPresentation(
             title = "VPN выключен",
-            description = "Нажмите, чтобы весь трафик пошёл через сервер",
+            description = "Выберите сервер и подключите VPN",
             primaryAction = VpnPrimaryAction.CONNECT,
             secondaryActions = emptyList()
         )
@@ -94,13 +47,13 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
         )
         VpnRunStatus.RECOVERING -> VpnStatusPresentation(
             title = "Восстанавливаем VPN",
-            description = snapshot.message.ifBlank { "Сеть сменилась, проверяем связь" },
+            description = snapshot.message.ifBlank { "Проверяем маршрут после смены сети" },
             primaryAction = VpnPrimaryAction.STOP,
             secondaryActions = emptyList()
         )
         VpnRunStatus.WAITING_FOR_NETWORK -> VpnStatusPresentation(
             title = "Нет подключения к сети",
-            description = snapshot.message.ifBlank { "Подключимся сами, как только сеть вернётся" },
+            description = snapshot.message.ifBlank { "VPN продолжит работу, когда сеть появится" },
             primaryAction = VpnPrimaryAction.STOP,
             secondaryActions = listOf(VpnSecondaryAction.NETWORK_SETTINGS)
         )
@@ -110,7 +63,7 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
             } else {
                 "Не удалось подключить VPN"
             },
-            description = snapshot.message.ifBlank { "Попробуйте ещё раз или откройте проверку" },
+            description = snapshot.message.ifBlank { "Повторите попытку или откройте проверку" },
             primaryAction = if (snapshot.failureKind == VpnFailureKind.AUTHORIZATION) {
                 VpnPrimaryAction.OPEN_SUBSCRIPTION
             } else {

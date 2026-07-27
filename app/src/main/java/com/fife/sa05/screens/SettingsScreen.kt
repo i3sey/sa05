@@ -1,10 +1,7 @@
 package com.fife.sa05.screens
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,18 +33,11 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.core.graphics.drawable.toBitmap
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.fife.sa05.AppRelease
@@ -55,15 +45,10 @@ import com.fife.sa05.AppUpdateCard
 import com.fife.sa05.AppUpdateState
 import com.fife.sa05.BuildConfig
 import com.fife.sa05.components.DashboardRow
-import com.fife.sa05.components.QrCode
 import com.fife.sa05.components.SectionTitle
-import com.fife.sa05.LAN_PROXY_USER
 import com.fife.sa05.InstalledApp
 import com.fife.sa05.R
-import com.fife.sa05.StrategyExplainer
 import com.fife.sa05.SubscriptionState
-import com.fife.sa05.TrafficRouteExplainer
-import com.fife.sa05.ui.theme.Space
 import com.fife.sa05.ui.theme.clickableScale
 import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.motionEnabled
@@ -97,8 +82,8 @@ internal fun ColumnScope.SettingsScreen(
     ContentScreen(title = "Настройки", onBack = onBack) {
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(Space.Item),
-            contentPadding = PaddingValues(bottom = Space.ScrollBottom)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 28.dp)
         ) {
             item { SectionTitle("Обновление приложения") }
             item {
@@ -208,7 +193,7 @@ internal fun ColumnScope.SettingsScreen(
                             Column(Modifier.weight(1f)) {
                                 Text("Показывать технические настройки")
                                 Text(
-                                    "Выбор режима, раздача по Wi-Fi, Telegram",
+                                    "Режимы обхода, ByeDPI, Cloudflare и ping хостов",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -222,7 +207,7 @@ internal fun ColumnScope.SettingsScreen(
                             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                             DashboardRow(
                                 title = "Расширенные настройки",
-                                subtitle = "Режим VPN, раздача, Telegram",
+                                subtitle = "Режимы, обход и Telegram",
                                 onClick = onAdvanced
                             )
                         }
@@ -242,15 +227,11 @@ internal fun ColumnScope.SettingsScreen(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "Цвета из обоев",
+                                "Material You",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                if (dynamicColor) {
-                                    "Цвета берутся из ваших обоев"
-                                } else {
-                                    "Стандартные цвета Material"
-                                },
+                                "Системные цвета обоев на Android 12+",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -272,25 +253,11 @@ internal fun ColumnScope.AdvancedSettingsScreen(
     selectedBackend: VpnBackend,
     zapretPreset: ZapretPreset,
     customZapretArguments: String,
-    allowIpv6Bypass: Boolean,
     telegramCfEnabled: Boolean,
     telegramCfDomain: String,
-    strategyMemoryCount: Int,
-    lanSharingEnabled: Boolean,
-    lanShareUri: String?,
-    lanShareAddress: String?,
-    lanSharePort: Int,
-    lanSharePassword: String,
-    onLanSharingChanged: (Boolean) -> Unit,
-    onRotateLanPassword: () -> Unit,
-    onCopyLanUri: () -> Unit,
     onBack: () -> Unit,
     onSelectBackend: (VpnBackend) -> Unit,
     onSelectZapretPreset: (ZapretPreset) -> Unit,
-    onAllowIpv6BypassChanged: (Boolean) -> Unit,
-    onExportStrategies: () -> Unit,
-    onImportStrategies: () -> Unit,
-    onClearStrategies: () -> Unit,
     onHosts: () -> Unit,
     onCustomZapretArgumentsChanged: (String) -> Unit,
     onSaveCustomZapretArguments: () -> Unit,
@@ -307,29 +274,14 @@ internal fun ColumnScope.AdvancedSettingsScreen(
             text = {
                 Column {
                     VpnBackend.entries.forEach { backend ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickableScale {
-                                    onSelectBackend(backend)
-                                    backendPickerVisible = false
-                                }
-                                .padding(vertical = Space.Item)
+                        TextButton(
+                            onClick = {
+                                onSelectBackend(backend)
+                                backendPickerVisible = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                backend.title,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (backend == selectedBackend) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                }
-                            )
-                            Text(
-                                backend.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Text(backend.title, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -342,35 +294,16 @@ internal fun ColumnScope.AdvancedSettingsScreen(
             onDismissRequest = { presetPickerVisible = false },
             title = { Text("Стратегия ByeDPI") },
             text = {
-                var explainedPreset by remember { mutableStateOf(zapretPreset) }
                 LazyColumn(modifier = Modifier.fillMaxWidth()) {
                     items(ZapretPreset.selectable, key = { it.name }) { preset ->
-                        Column(Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                TextButton(
-                                    onClick = {
-                                        onSelectZapretPreset(preset)
-                                        presetPickerVisible = false
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(preset.title, modifier = Modifier.fillMaxWidth())
-                                }
-                                TextButton(
-                                    onClick = {
-                                        explainedPreset = preset.takeIf { it != explainedPreset }
-                                            ?: zapretPreset
-                                    }
-                                ) {
-                                    Text(if (explainedPreset == preset) "Скрыть" else "Что это")
-                                }
-                            }
-                            AnimatedVisibility(visible = explainedPreset == preset) {
-                                StrategyExplainer(preset, Modifier.padding(bottom = 8.dp))
-                            }
+                        TextButton(
+                            onClick = {
+                                onSelectZapretPreset(preset)
+                                presetPickerVisible = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(preset.title, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -381,8 +314,8 @@ internal fun ColumnScope.AdvancedSettingsScreen(
     ContentScreen(title = "Расширенные", onBack = onBack) {
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(Space.Item),
-            contentPadding = PaddingValues(bottom = Space.ScrollBottom)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 24.dp)
         ) {
             item { SectionTitle("Маршрут") }
             item {
@@ -404,187 +337,22 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         DashboardRow(
                             title = "Хосты",
-                            subtitle = "Замерить задержку до серверов профиля",
+                            subtitle = "Проверка outbound-подключений",
                             onClick = onHosts
                         )
                     }
                 }
             }
             item {
-                TrafficRouteExplainer(
-                    selectedBackend,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "Пропускать IPv6 мимо VPN",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            Text(
-                                if (allowIpv6Bypass) {
-                                    "IPv6 идёт напрямую: реальный адрес виден сайтам, " +
-                                        "блокировки по IPv6 не обходятся. Включайте только " +
-                                        "если без этого сеть не работает."
-                                } else {
-                                    "IPv6 закрыт туннелем — приложения переходят на IPv4. " +
-                                        "Включайте, только если без этого сеть не работает."
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (allowIpv6Bypass) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                        }
-                        Switch(
-                            checked = allowIpv6Bypass,
-                            onCheckedChange = onAllowIpv6BypassChanged
-                        )
-                    }
-                }
-            }
-            item { SectionTitle("Раздача обхода") }
-            item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    "Раздавать по Wi-Fi",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Text(
-                                    "Телевизор, ноутбук или приставка в той же сети смогут " +
-                                        "ходить через ваш туннель.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = lanSharingEnabled,
-                                onCheckedChange = onLanSharingChanged
-                            )
-                        }
-                        if (lanSharingEnabled) {
-                            Text(
-                                "Единственный вход снаружи, и он закрыт паролем — всё остальное " +
-                                    "доступно только внутри телефона. В публичном Wi-Fi не " +
-                                    "включайте: гости тратят вашу подписку и батарею.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            HorizontalDivider()
-                            if (lanShareUri == null || lanShareAddress == null) {
-                                Text(
-                                    "Нет локальной сети. Подключитесь к Wi-Fi или включите " +
-                                        "точку доступа — адрес появится здесь.",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                Text("Адрес: $lanShareAddress:$lanSharePort")
-                                Text("Логин: $LAN_PROXY_USER")
-                                SelectionContainer {
-                                    Text(
-                                        "Пароль: $lanSharePassword",
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            fontFamily = FontFamily.Monospace
-                                        )
-                                    )
-                                }
-                                Box(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    QrCode(
-                                        content = lanShareUri,
-                                        modifier = Modifier.size(200.dp)
-                                    )
-                                }
-                                Text(
-                                    "Изменения применяются при следующем подключении VPN.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = onCopyLanUri) { Text("Копировать") }
-                                    TextButton(onClick = onRotateLanPassword) {
-                                        Text("Новый пароль")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            item { SectionTitle("Стратегии") }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                        Text("Локальный обход", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "Запомненные стратегии",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            if (strategyMemoryCount == 0) {
-                                "Пока пусто. Записи появятся, когда автоподбор найдёт " +
-                                    "рабочий обход в вашей сети."
-                            } else {
-                                "Записей: $strategyMemoryCount. Привязаны к оператору, а не к конкретному " +
-                                    "подключению, поэтому переживают смену сети."
-                            },
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "Файл можно передать другому человеку с тем же оператором. " +
-                                "Импорт не перетирает то, что подтвердил ваш телефон, и не " +
-                                "содержит ни ссылки подписки, ни адресов серверов.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = onExportStrategies,
-                                enabled = strategyMemoryCount > 0
-                            ) { Text("Экспорт") }
-                            OutlinedButton(onClick = onImportStrategies) { Text("Импорт") }
-                            if (strategyMemoryCount > 0) {
-                                TextButton(onClick = onClearStrategies) { Text("Очистить") }
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text("Локальный обход", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Применяются, только если выше выбрана стратегия «Свои параметры».",
+                            "Свои параметры используются только при выборе стратегии " +
+                                "«Свои параметры».",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         OutlinedTextField(
@@ -606,7 +374,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                         Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("Telegram", style = MaterialTheme.typography.titleMedium)
+                        Text("Telegram", style = MaterialTheme.typography.titleLarge)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -615,7 +383,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
                             Column(Modifier.weight(1f)) {
                                 Text("Cloudflare-маршрут")
                                 Text(
-                                    "Обходной путь к серверам Telegram",
+                                    "WebSocket-маршрут к Telegram DC",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -679,7 +447,7 @@ internal fun HostPingList(
 ) {
     val parsed = remember(config) { runCatching { XrayConfig.extractHosts(config) } }
     Column(modifier.padding(top = 8.dp)) {
-        Text("Замер идёт через настройки выбранного сервера: протокол, шифрование, транспорт.")
+        Text("Проверка выполняется через протокол и настройки выбранного outbound.")
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         val hosts = parsed.getOrNull()
         when {
@@ -687,7 +455,7 @@ internal fun HostPingList(
                 parsed.exceptionOrNull()?.message ?: "Некорректный JSON",
                 color = MaterialTheme.colorScheme.error
             )
-            hosts.isNullOrEmpty() -> Text("В этом профиле нет серверов для замера.")
+            hosts.isNullOrEmpty() -> Text("Прокси-хосты в outbounds не найдены.")
             else -> LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -736,36 +504,6 @@ internal fun HostPingList(
         }
     }
 }
-
-/**
- * Loads one launcher icon off the main thread. Only rows the user actually scrolls to pay for it,
- * because `LazyColumn` composes them on demand.
- */
-@Composable
-private fun AppIcon(packageName: String) {
-    val context = LocalContext.current
-    val icon by produceState<ImageBitmap?>(initialValue = null, packageName) {
-        value = withContext(Dispatchers.IO) {
-            runCatching {
-                context.packageManager.getApplicationIcon(packageName)
-                    .toBitmap(width = ICON_PX, height = ICON_PX)
-                    .asImageBitmap()
-            }.getOrNull()
-        }
-    }
-    Box(
-        modifier = Modifier
-            .padding(horizontal = 10.dp)
-            .size(32.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        icon?.let {
-            Image(bitmap = it, contentDescription = null, modifier = Modifier.size(32.dp))
-        }
-    }
-}
-
-private const val ICON_PX = 96
 
 @Composable
 internal fun AppExclusionList(
@@ -835,7 +573,6 @@ internal fun AppExclusionList(
                         checked = app.packageName in selected,
                         onCheckedChange = null
                     )
-                    AppIcon(app.packageName)
                     Column {
                         Text(app.label)
                         SelectionContainer {

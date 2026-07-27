@@ -7,6 +7,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Launch
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -17,7 +21,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -40,7 +43,7 @@ fun AppUpdateCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("Обновление приложения", style = MaterialTheme.typography.titleMedium)
+            Text("Обновление приложения", style = MaterialTheme.typography.titleLarge)
             Text(
                 "Текущая версия: $currentVersionName ($currentVersionCode)",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -96,7 +99,7 @@ fun AppUpdateCard(
                         when {
                             downloadedPath.isNullOrBlank() && updateState.downloadProgress == null ->
                                 Button(onClick = { onDownloadUpdate(updateState.release) }) {
-                                    Icon(painterResource(R.drawable.ic_download), contentDescription = null)
+                                    Icon(Icons.Default.Download, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
                                     Text("Скачать")
                                 }
@@ -108,12 +111,12 @@ fun AppUpdateCard(
                                 Button(
                                     onClick = { onInstallUpdate(installPath) }
                                 ) {
-                                    Icon(painterResource(R.drawable.ic_launch), contentDescription = null)
+                                    Icon(Icons.AutoMirrored.Filled.Launch, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
                                     Text("Установить")
                                 }
                             else -> Button(onClick = onOpenUnknownSources) {
-                                Icon(painterResource(R.drawable.ic_launch), contentDescription = null)
+                                Icon(Icons.AutoMirrored.Filled.Launch, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
                                 Text("Разрешить установку")
                             }
@@ -126,7 +129,7 @@ fun AppUpdateCard(
                 enabled = !checking && !downloading,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(painterResource(R.drawable.ic_refresh), contentDescription = null)
+                Icon(Icons.Default.Refresh, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     when {

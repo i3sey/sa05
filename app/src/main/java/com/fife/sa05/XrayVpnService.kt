@@ -16,7 +16,6 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -56,8 +55,6 @@ class XrayVpnService : VpnService() {
         private const val PROCESS_MONITOR_MS = 3_000L
         private val _socksPort = MutableStateFlow<Int?>(null)
         val socksPort = _socksPort.asStateFlow()
-        private val _traffic = MutableStateFlow(VpnTraffic())
-        val traffic = _traffic.asStateFlow()
         private val _zapretAutoProgress = MutableStateFlow(ZapretAutoProgress())
         val zapretAutoProgress = _zapretAutoProgress.asStateFlow()
         @Volatile private var verificationMessage = ""
@@ -82,18 +79,12 @@ class XrayVpnService : VpnService() {
     private var fullAutoOptimizationJob: Job? = null
     private var networkRecoveryJob: Job? = null
     private var processMonitorJob: Job? = null
-    private val tunController by lazy { TunController({ Builder() }, packageName) }
+    private var tun: ParcelFileDescriptor? = null
     private var proxyProcess: Process? = null
     private var auxiliaryProcess: Process? = null
     private var bridgeProcess: Process? = null
     private var tun2socksProcess: Process? = null
     private var xrayRuntime = XrayRuntime.STOPPED
-    private val supervisor = ProcessSupervisor()
-    private val trafficCounter = UidTrafficCounter()
-    /** Preset the currently running ByeDPI process was started with, for targeted restarts. */
-    private var runningZapretPreset: ZapretPreset? = null
-    /** SOCKS port the currently running tun2socks was pointed at, for targeted restarts. */
-    private var tun2socksPort: Int? = null
     private var runningBackend = VpnBackend.PROXY_ONLY
     private var runningSettings = XraySettings(config = XrayPreferences.defaultConfig)
     private var runningProfile: SubscriptionProfile? = null
@@ -224,12 +215,11 @@ class XrayVpnService : VpnService() {
                 check(generation == startGeneration.get()) { "Запуск отменён" }
                 _socksPort.value = backend.socksPort
                 if (!backend.tunnelReady) {
-                    startTun2socks(createTun(), backend.socksPort)
+                    tun = createTun()
+                    startTun2socks(tun!!, backend.socksPort)
                 }
                 check(generation == startGeneration.get()) { "Запуск отменён" }
                 activeNetworkKey = currentNetwork()?.key
-                trafficCounter.start()
-                _traffic.value = VpnTraffic()
                 publishRuntime(
                     status = VpnRunStatus.CONNECTED,
                     message = "Маршрут запущен",
@@ -260,7 +250,7 @@ class XrayVpnService : VpnService() {
                 if (currentNetwork() == null) {
                     publishRuntime(
                         status = VpnRunStatus.WAITING_FOR_NETWORK,
-                        message = "Сеть пропала во время подключения, ждём её возвращения",
+                        message = "Сеть пропала во время запуска; ждём восстановления",
                         failureKind = VpnFailureKind.NETWORK,
                         recoveryAttempt = recoveryAttempt ?: 0,
                         components = componentSnapshots(failed = true)
@@ -317,7 +307,7 @@ class XrayVpnService : VpnService() {
         }
         copyGeoAssets()
         val configFile = File(filesDir, "config.json").apply {
-            writeText(applyLanSharing(validated.runtimeJson))
+            writeText(validated.runtimeJson)
         }
         val binary = File(applicationInfo.nativeLibraryDir, "libxray.so")
         check(binary.exists()) { "libxray.so не найден" }
@@ -350,10 +340,10 @@ class XrayVpnService : VpnService() {
                 _zapretAutoProgress.value = ZapretAutoProgress(
                     message = "Локальный маршрут готов"
                 )
-                verificationMessage = "Обход проверен, сайты открываются"
+                verificationMessage = "Локальный маршрут проверен"
             } else {
                 _zapretAutoProgress.value = ZapretAutoProgress(
-                    message = "Полностью проверить не удалось, включили лучший из найденных вариантов"
+                    message = "Строгая проверка не прошла, используется лучший пресет"
                 )
                 verificationMessage =
                     "Строгая проверка не прошла: лучший результат " +
@@ -369,67 +359,6 @@ class XrayVpnService : VpnService() {
         waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 5_000)
         startZapretBridge()
         return BackendStart(ZAPRET_BRIDGE_PORT)
-    }
-
-    /**
-     * Adds the LAN sharing inbound to the runtime config copy only, leaving the saved profile
-     * alone, exactly like the Full Auto augmentation.
-     *
-     * Failing to find a local address is not an error: the user may simply be on mobile data
-     * right now. The VPN still comes up, just without sharing.
-     */
-    private fun applyLanSharing(runtimeJson: String): String {
-        // Always first, whether or not sharing is on: a provider's 0.0.0.0 inbound is an open
-        // proxy for the whole Wi-Fi, and the authenticated inbound below is the supported way
-        // to let another device in.
-        val hardened = hardenInbounds(runtimeJson)
-        if (hardened.reboundPorts.isNotEmpty()) {
-            Log.i(
-                "LanShare",
-                "Pulled ${hardened.reboundPorts.size} inbound(s) back to loopback: " +
-                    hardened.reboundPorts.joinToString()
-            )
-        }
-        val json = hardened.json
-        if (!runningSettings.lanSharingEnabled) return json
-        val password = runningSettings.lanSharingPassword
-        if (password.isBlank()) {
-            Log.w("LanShare", "Sharing enabled without a password; refusing to open the port")
-            return json
-        }
-        val endpoint = lanEndpoints().firstOrNull() ?: run {
-            Log.i("LanShare", "No local network address; sharing stays off this session")
-            return json
-        }
-        val port = pickLanProxyPort(inboundPorts(json))
-        return runCatching {
-            addLanProxyInbound(
-                raw = json,
-                listenAddress = endpoint.address,
-                port = port,
-                user = LAN_PROXY_USER,
-                password = password
-            )
-        }.getOrElse {
-            Log.w("LanShare", "Could not add the sharing inbound", it)
-            json
-        }
-    }
-
-    private suspend fun rememberStrategy(fingerprint: NetworkFingerprint, preset: ZapretPreset) {
-        if (fingerprint.key.isBlank() || preset == ZapretPreset.AUTO) return
-        runCatching {
-            XrayPreferences.saveStrategyMemory(
-                this,
-                StrategyMemory(
-                    fingerprintKey = fingerprint.key,
-                    preset = preset,
-                    successCount = 1,
-                    algorithmVersion = ZAPRET_AUTO_ALGORITHM_VERSION,
-                    updatedAtMillis = System.currentTimeMillis()
-                )
-            )
-        }.onFailure { Log.w("ByeDPI", "Could not remember strategy", it) }
     }
 
     private suspend fun resolveAutoPreset(): AutoPresetResolution {
@@ -449,15 +378,7 @@ class XrayVpnService : VpnService() {
                 )
             }
         )
-        // The direct probes just told us what this network blocks, so the fingerprint can carry
-        // that signature and stay meaningful across reconnects and cells.
-        val fingerprint = networkFingerprint(directResults)
-        val remembered = XrayPreferences.strategyMemory(
-            this,
-            fingerprint.key,
-            ZAPRET_AUTO_ALGORITHM_VERSION
-        )?.preset
-        val cached = remembered ?: XrayPreferences.zapretAutoCache(this, networkKey)
+        val cached = XrayPreferences.zapretAutoCache(this, networkKey)
             ?.takeIf {
                 it.networkKey == networkKey &&
                     it.algorithmVersion == ZAPRET_AUTO_ALGORITHM_VERSION
@@ -499,7 +420,6 @@ class XrayVpnService : VpnService() {
                             ZAPRET_AUTO_ALGORITHM_VERSION
                         )
                     )
-                    rememberStrategy(fingerprint, preset)
                     return AutoPresetResolution(
                         preset = preset,
                         verified = true,
@@ -513,7 +433,7 @@ class XrayVpnService : VpnService() {
             }
         }
         val best = ZapretAutoSelection.fallback(scores)
-            ?: error("Обход на телефоне не запустился ни с одной стратегией")
+            ?: error("ByeDPI не запустился ни с одной стратегией")
         prepareZapretCandidate(best.first)
         XrayPreferences.saveZapretAutoCache(
             this,
@@ -524,8 +444,6 @@ class XrayVpnService : VpnService() {
                 ZAPRET_AUTO_ALGORITHM_VERSION
             )
         )
-        // A fallback preset is a guess, not a confirmation, so it is not remembered: writing it
-        // down would make the next connection trust an unverified answer.
         return AutoPresetResolution(
             preset = best.first,
             verified = false,
@@ -578,14 +496,15 @@ class XrayVpnService : VpnService() {
         pipeLogs("ByeDPI", proxyProcess!!)
         waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 3_000)
         startZapretBridge()
-        startTun2socks(createTun(), ZAPRET_BRIDGE_PORT)
+        tun = createTun()
+        startTun2socks(tun!!, ZAPRET_BRIDGE_PORT)
     }
 
     private suspend fun startFullAutoBackend(): BackendStart {
         val socksPort = startXrayBackend(fullAuto = false)
         runningLabel = "[BETA] ${selectedProfileLabel()} · Xray · Telegram"
         _zapretAutoProgress.value = ZapretAutoProgress(
-            message = "VPN уже работает через сервер, подбираем обход на телефоне"
+            message = "VPN запущен через Xray, подбираем локальный обход"
         )
         verificationMessage =
             "VPN уже работает через Xray; YouTube-обход подбирается в фоне"
@@ -755,7 +674,7 @@ class XrayVpnService : VpnService() {
     }
 
     private fun verifyRunningTunnel() {
-        verificationMessage = "Проверяем, открываются ли сайты…"
+        verificationMessage = "Проверяем полный VPN-маршрут..."
         scope.launch {
             delay(250)
             val results = ConnectivityDiagnostics().runSocks(
@@ -763,7 +682,7 @@ class XrayVpnService : VpnService() {
                 resolveForSocks = runningBackend == VpnBackend.LOCAL_BYPASS,
                 targetsToTest = ConnectivityDiagnostics.autoTargets
             )
-            val tunnelAlive = isProcessAlive(tun2socksProcess) && tunController.established
+            val tunnelAlive = isProcessAlive(tun2socksProcess) && tun != null
             val pingMs = results.firstOrNull {
                 it.reachable && it.target.group == DiagnosticGroup.CONTROL
             }?.delayMs
@@ -772,7 +691,7 @@ class XrayVpnService : VpnService() {
             ) {
                 pingMs?.let { "Пинг: $it мс" } ?: "Подключение проверено"
             } else {
-                "Сайты с ограничениями пока не открылись — попробуйте другой сервер"
+                "VPN включён, но обход ограничений не подтверждён"
             }
             val runtime = VpnRuntimeState.read(this@XrayVpnService)
             if (runtime.status == VpnRunStatus.CONNECTED) {
@@ -789,7 +708,6 @@ class XrayVpnService : VpnService() {
     private fun createZapretProcess(preset: ZapretPreset): Process {
         val binary = File(applicationInfo.nativeLibraryDir, "libciadpi.so")
         check(binary.exists()) { "ByeDPI не найден" }
-        runningZapretPreset = preset
         return ProcessBuilder(
             ZapretCommand.build(
                 binary.absolutePath,
@@ -975,14 +893,16 @@ class XrayVpnService : VpnService() {
                     continue
                 }
                 if (!requiredProcessesRunning()) {
-                    if (!recoverDeadProcesses(runtime)) return@launch
-                    continue
-                }
-                supervisedRoles(runningBackend, xrayRuntime).forEach(supervisor::noteHealthy)
-                val traffic = trafficCounter.sinceStart()
-                if (traffic != _traffic.value) {
-                    _traffic.value = traffic
-                    startForegroundNow(STATE_CONNECTED)
+                    publishRuntime(
+                        status = VpnRunStatus.RECOVERING,
+                        message = "Один из компонентов VPN остановился",
+                        failureKind = VpnFailureKind.BACKEND,
+                        connectedAtMillis = runtime.connectedAtMillis,
+                        components = componentSnapshots(failed = true)
+                    )
+                    startForegroundNow("Восстановление VPN")
+                    beginStart(recoveryAttempt = 1)
+                    return@launch
                 }
                 val components = componentSnapshots()
                 if (components != runtime.components) {
@@ -997,121 +917,12 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun roleProcess(role: SupervisedRole): Process? = when (role) {
-        SupervisedRole.XRAY -> proxyProcess
-        SupervisedRole.TUN2SOCKS -> tun2socksProcess
-        SupervisedRole.BRIDGE -> bridgeProcess
-        SupervisedRole.BYEDPI -> when (runningBackend) {
-            // Local Bypass runs ByeDPI as the primary process; Full Auto runs it beside Xray.
-            VpnBackend.LOCAL_BYPASS -> proxyProcess
-            else -> auxiliaryProcess
-        }
-    }
-
-    private fun deadSupervisedRoles(): List<SupervisedRole> =
-        supervisedRoles(runningBackend, xrayRuntime)
-            .filterNot { isProcessAlive(roleProcess(it)) }
-
-    /**
-     * Restarts just the processes that died, newest failure first, instead of tearing the whole
-     * stack down. Returns false when the caller must stop monitoring because a full restart was
-     * triggered instead.
-     */
-    private suspend fun recoverDeadProcesses(runtime: VpnRuntimeSnapshot): Boolean {
-        // A lost TUN or a stopped Telegram Proxy cannot be respawned in isolation — those
-        // belong to the full start path.
-        val dead = deadSupervisedRoles()
-        if (!tunController.established || dead.isEmpty()) {
-            return fullRestart(runtime, "Часть VPN остановилась, восстанавливаем")
-        }
-        val role = dead.first()
-        val backoff = supervisor.nextBackoffMs(role)
-            ?: return fullRestart(
-                runtime,
-                "${role.title} не удержался после ${ProcessRestartPolicy.MAX_ATTEMPTS} попыток"
-            )
-        publishRuntime(
-            status = VpnRunStatus.RECOVERING,
-            message = "Перезапускаем ${role.title}",
-            failureKind = VpnFailureKind.BACKEND,
-            connectedAtMillis = runtime.connectedAtMillis,
-            components = componentSnapshots()
-        )
-        delay(backoff)
-        val cascade = restartCascade(runningBackend, xrayRuntime, role)
-        val restarted = runCatching { cascade.forEach { restartRole(it) } }
-        if (restarted.isFailure) {
-            Log.w("XrayVpnService", "Targeted restart of ${role.name} failed", restarted.exceptionOrNull())
-            return fullRestart(runtime, "Не удалось перезапустить ${role.title}")
-        }
-        publishRuntime(
-            status = VpnRunStatus.CONNECTED,
-            message = runtime.message,
-            connectedAtMillis = runtime.connectedAtMillis,
-            components = componentSnapshots()
-        )
-        startForegroundNow(STATE_CONNECTED)
-        return true
-    }
-
-    private fun fullRestart(runtime: VpnRuntimeSnapshot, message: String): Boolean {
-        supervisor.reset()
-        publishRuntime(
-            status = VpnRunStatus.RECOVERING,
-            message = message,
-            failureKind = VpnFailureKind.BACKEND,
-            connectedAtMillis = runtime.connectedAtMillis,
-            components = componentSnapshots(failed = true)
-        )
-        startForegroundNow("Восстановление VPN")
-        beginStart(recoveryAttempt = 1)
-        return false
-    }
-
-    private suspend fun restartRole(role: SupervisedRole) {
-        when (role) {
-            SupervisedRole.XRAY -> {
-                val fullAuto = xrayRuntime == XrayRuntime.FULL_AUTO_YOUTUBE
-                closeProcess(proxyProcess)
-                proxyProcess = null
-                xrayRuntime = XrayRuntime.STOPPED
-                startXrayBackend(fullAuto = fullAuto)
-            }
-            SupervisedRole.BYEDPI -> {
-                val preset = runningZapretPreset ?: error("Пресет ByeDPI неизвестен")
-                if (runningBackend == VpnBackend.LOCAL_BYPASS) {
-                    closeProcess(proxyProcess)
-                    proxyProcess = createZapretProcess(preset)
-                    pipeLogs("ByeDPI", proxyProcess!!)
-                    waitForPort(proxyProcess!!, ZAPRET_SOCKS_PORT, 5_000)
-                } else {
-                    closeProcess(auxiliaryProcess)
-                    auxiliaryProcess = createZapretProcess(preset)
-                    pipeLogs("ByeDPI", auxiliaryProcess!!)
-                    waitForPort(auxiliaryProcess!!, ZAPRET_SOCKS_PORT, 5_000)
-                }
-            }
-            SupervisedRole.BRIDGE -> {
-                closeProcess(bridgeProcess)
-                bridgeProcess = null
-                startZapretBridge()
-            }
-            SupervisedRole.TUN2SOCKS -> {
-                val port = tun2socksPort ?: error("SOCKS-порт tun2socks неизвестен")
-                val fd = tunController.descriptorOrNull ?: error("TUN закрыт")
-                closeProcess(tun2socksProcess)
-                tun2socksProcess = null
-                startTun2socks(fd, port)
-            }
-        }
-    }
-
     private fun requiredProcessesRunning(): Boolean {
         return requiredProcessesRunning(
             backend = runningBackend,
             xrayRuntime = xrayRuntime,
             health = VpnProcessHealth(
-                tun = tunController.established,
+                tun = tun != null,
                 tun2socks = isProcessAlive(tun2socksProcess),
                 proxy = isProcessAlive(proxyProcess),
                 bridge = isProcessAlive(bridgeProcess),
@@ -1136,7 +947,7 @@ class XrayVpnService : VpnService() {
                 else -> isProcessAlive(proxyProcess)
             }
             add(VpnComponentSnapshot(VpnRuntimeComponent.XRAY, state(xrayRunning)))
-            add(VpnComponentSnapshot(VpnRuntimeComponent.TUN, state(tunController.established)))
+            add(VpnComponentSnapshot(VpnRuntimeComponent.TUN, state(tun != null)))
             add(
                 VpnComponentSnapshot(
                     VpnRuntimeComponent.TUN2SOCKS,
@@ -1206,65 +1017,41 @@ class XrayVpnService : VpnService() {
 
     private fun networkKey(): String = currentNetwork()?.key.orEmpty()
 
-    /**
-     * Stable identity of the current network for the strategy database.
-     *
-     * Deliberately excludes [android.net.Network.networkHandle], which [currentNetwork] uses:
-     * that handle is reissued on every reconnect, so a key built on it threw away a remembered
-     * preset the moment the user left Wi-Fi range and came back.
-     */
-    private fun networkFingerprint(results: List<DiagnosticResult> = emptyList()): NetworkFingerprint {
-        val network = connectivityManager.activeNetwork
-        val capabilities = network?.let(connectivityManager::getNetworkCapabilities)
-        val type = when {
-            capabilities == null -> VpnNetworkType.NONE
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> VpnNetworkType.WIFI
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> VpnNetworkType.MOBILE
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> VpnNetworkType.ETHERNET
-            else -> VpnNetworkType.OTHER
-        }
-        val operator = when (type) {
-            // getSimOperator/getNetworkOperator need no runtime permission.
-            VpnNetworkType.MOBILE -> runCatching {
-                val telephony = getSystemService(TelephonyManager::class.java)
-                telephony?.simOperator?.takeIf(String::isNotBlank)
-                    ?: telephony?.networkOperator.orEmpty()
-            }.getOrDefault("")
-            else -> resolverDigest(
-                network?.let(connectivityManager::getLinkProperties)
-                    ?.dnsServers
-                    ?.mapNotNull { it.hostAddress }
-                    .orEmpty()
-            )
-        }
-        return NetworkFingerprint(
-            transport = type,
-            operator = operator,
-            dpiSignature = dpiSignature(results)
-        )
-    }
+    private fun createTun(): ParcelFileDescriptor {
+        val builder = Builder()
+            .setSession("SA05 ${runningBackend.title}")
+            .setMtu(1500)
+            .addAddress("10.10.10.1", 30)
+            .addRoute("0.0.0.0", 0)
+            .addDnsServer("1.1.1.1")
+            .setBlocking(false)
 
-    private fun createTun(): ParcelFileDescriptor = tunController.establish(
-        session = "SA05 ${runningBackend.title}",
-        allowIpv6Bypass = runningSettings.allowIpv6Bypass,
-        excludedApps = runningSettings.excludedApps
-    )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
+        builder.addDisallowedApplication(packageName)
+        runningSettings.excludedApps.forEach { pkg ->
+            try {
+                builder.addDisallowedApplication(pkg)
+            } catch (e: Exception) {
+                Log.w("XrayVpnService", "Cannot exclude $pkg", e)
+            }
+        }
+        return builder.establish() ?: error("Android не создал TUN-интерфейс")
+    }
 
     private suspend fun startTun2socks(fd: ParcelFileDescriptor, socksPort: Int) {
         val binary = File(applicationInfo.nativeLibraryDir, "libtun2socks.so")
         check(binary.exists()) { "libtun2socks.so не найден" }
-        tun2socksPort = socksPort
         val socketFile = File(filesDir, "tun2socks.sock")
         socketFile.delete()
         tun2socksProcess = ProcessBuilder(
-            Tun2socksCommand.build(
-                binary = binary.absolutePath,
-                socksPort = socksPort,
-                socketPath = socketFile.absolutePath,
-                // Matches what createTun put on the interface: an IPv6 address is only there
-                // when the bypass switch is off, and it must not be a black hole.
-                ipv6 = !runningSettings.allowIpv6Bypass
-            )
+            binary.absolutePath,
+            "--netif-ipaddr", "10.10.10.2",
+            "--netif-netmask", "255.255.255.252",
+            "--socks-server-addr", "127.0.0.1:$socksPort",
+            "--tunmtu", "1500",
+            "--sock-path", socketFile.absolutePath,
+            "--enable-udprelay",
+            "--loglevel", "notice"
         )
             .directory(filesDir)
             .redirectErrorStream(true)
@@ -1315,17 +1102,13 @@ class XrayVpnService : VpnService() {
         scope.launch {
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach {
-                        Log.i(tag, it)
-                        DiagnosticLog.record(tag, it)
-                    }
+                    lines.forEach { Log.i(tag, it) }
                 }
             } catch (e: Exception) {
                 val closedDuringStop = e is InterruptedIOException ||
                     e.message?.contains("interrupted by close", ignoreCase = true) == true
                 if (!closedDuringStop && isProcessAlive(process)) {
                     Log.w(tag, "Не удалось прочитать лог", e)
-                    DiagnosticLog.record(tag, "log reader failed: ${e.message ?: e.javaClass.simpleName}")
                 }
             }
         }
@@ -1405,12 +1188,8 @@ class XrayVpnService : VpnService() {
         xrayRuntime = XrayRuntime.STOPPED
         closeProcess(auxiliaryProcess)
         auxiliaryProcess = null
-        runningZapretPreset = null
-        tun2socksPort = null
-        supervisor.reset()
-        trafficCounter.reset()
-        _traffic.value = VpnTraffic()
-        tunController.close()
+        runCatching { tun?.close() }
+        tun = null
     }
 
     private fun selectedLabel(): String = when (runningBackend) {
@@ -1546,18 +1325,9 @@ class XrayVpnService : VpnService() {
             .setContentText(
                 vpnNotificationContentText(
                     runningProfileName = runtime.profileName,
-                    fallbackProfileName = runningLabel.ifBlank { selectedLabel() },
-                    traffic = _traffic.value
+                    fallbackProfileName = runningLabel.ifBlank { selectedLabel() }
                 )
             )
-            .apply {
-                // The system ticks the chronometer itself, so uptime stays live without the
-                // service waking up for it.
-                val connected = runtime.status == VpnRunStatus.CONNECTED &&
-                    runtime.connectedAtMillis > 0L
-                setUsesChronometer(connected)
-                if (connected) setWhen(runtime.connectedAtMillis) else setShowWhen(false)
-            }
             .setSubText(runtime.message.ifBlank { "SA05 ${runningBackend.title}" })
             .setContentIntent(openApp)
             .addAction(0, "Отключить", stopIntent)

@@ -18,15 +18,7 @@ grep -F 'cache-provider: basic' "$workflow" >/dev/null
 grep -F 'run: ./gradlew lint testDebugUnitTest assembleDev' "$workflow" >/dev/null
 grep -F 'run: python3 scripts/check-elf-16kb.py app/src/main/jniLibs/arm64-v8a/*.so' \
     "$workflow" >/dev/null
-# A developer who built x86_64 locally gets a two-ABI dev APK, so the dev check must
-# tolerate it. CI itself only ever sees arm64 — x86_64 is not tracked.
-grep -F 'run: scripts/check-16kb-compat.sh app/build/outputs/apk/dev/app-dev.apk arm64-v8a,x86_64' \
+grep -F 'run: scripts/check-16kb-compat.sh app/build/outputs/apk/dev/app-dev.apk' \
     "$workflow" >/dev/null
 grep -F 'run: app/scripts/check-repository-secrets.sh .' "$workflow" >/dev/null
 grep -F 'run: app/scripts/tests/app-ci-workflow-test.sh' "$workflow" >/dev/null
-# R8 runs on release only, so the minified build and its keep-rule check are the gate.
-grep -F 'run: ./gradlew assembleRelease' "$workflow" >/dev/null
-grep -F 'run: app/scripts/check-r8-keeps.sh app/build/outputs/apk/release/app-release.apk' \
-    "$workflow" >/dev/null
-grep -F 'run: scripts/check-16kb-compat.sh app/build/outputs/apk/release/app-release.apk' \
-    "$workflow" >/dev/null

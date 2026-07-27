@@ -1,14 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!--
-      Only ever seen for the instant between the window opening and Compose drawing, but that
-      instant used to be a white flash on a dark-themed phone: the theme was pinned to
-      Material.Light regardless of the system setting. The night variant in values-night keeps
-      that moment matching the system, and windowBackground follows the theme instead of the
-      framework default.
-    -->
-    <style name="Theme.Sa05" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">?android:attr/colorBackground</item>
-    </style>
+    <style name="Theme.Sa05" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>

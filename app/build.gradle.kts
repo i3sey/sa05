@@ -20,18 +20,6 @@ if (releaseKeystorePath != null) {
     }
 }
 
-/** ABIs that have a complete set of bundled native executables checked in. */
-val availableNativeAbis: Set<String> =
-    file("src/main/jniLibs").listFiles()
-        ?.filter { it.isDirectory }
-        ?.filter { abiDir ->
-            listOf("libxray.so", "libtun2socks.so", "libciadpi.so", "libtgwsproxy.so")
-                .all { File(abiDir, it).isFile }
-        }
-        ?.map { it.name }
-        ?.toSet()
-        .orEmpty()
-
 android {
     namespace = "com.fife.sa05"
     compileSdk {
@@ -65,17 +53,9 @@ android {
             versionNameSuffix = "-dev"
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("debug")
-            // Emulators are x86_64; release stays arm64-only. Only the ABIs whose native
-            // libraries are actually present are added, so a checkout without an x86_64
-            // build still produces a working arm64 dev APK instead of one that installs
-            // on an emulator and dies looking for libxray.so.
-            ndk {
-                abiFilters += availableNativeAbis - "arm64-v8a"
-            }
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.create("release").apply {
                     storeFile = releaseKeystorePath
@@ -124,6 +104,7 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation("androidx.graphics:graphics-path:1.1.0")
@@ -131,12 +112,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation("androidx.work:work-runtime-ktx:2.11.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("net.java.dev.jna:jna:5.19.1@aar")
-    // QR encoding for LAN sharing. Pure Java, no Android dependencies.
-    implementation("com.google.zxing:core:3.5.4")
     testImplementation(libs.junit)
     testImplementation("org.json:json:20250517")
     androidTestImplementation(platform(libs.androidx.compose.bom))

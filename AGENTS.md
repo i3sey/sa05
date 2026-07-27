@@ -100,23 +100,15 @@ complete Xray configs. The selected profile is identified by `remarks`.
 
 ## Native runtime
 
-- The release APK is intentionally restricted to `arm64-v8a`. The `dev` build type also
-  packages `x86_64` so it runs on an emulator; those libraries are never released.
-  `abiFilters` is derived from the ABI directories that actually contain a full set of
-  native executables, so a checkout without an x86_64 build still yields a working
-  arm64 dev APK.
+- APK is intentionally restricted to `arm64-v8a`.
 - `geoip.dat` and `geosite.dat` were sourced from the published NetGuard
   v1.3.11 APK. Native executables are now reproducibly built by
   `scripts/build-native-arm64.sh` with Go 1.26.4 and Android NDK r29.
 - Xray is pinned to commit `d2758a023cd7f4174a5a5fa4ff66e487d4342ba0`
   because the requested config uses modern transports including Reality,
   XHTTP, and Hysteria.
-- `libciadpi.so` is built from ByeDPI v0.17.3 as a **dynamically linked** aarch64 PIE and
-  packaged with a `.so` name so Android extracts it as executable. It must not be linked
-  `-static-pie`: static PIE executables segfault before reaching `main` on current Android,
-  which silently disabled Local Bypass and the Full Auto ByeDPI branch. A bare `printf()`
-  built `-static-pie` fails identically, so this is the platform, not ByeDPI.
-  `scripts/build-native.sh` fails the build if the binary comes out without an `INTERP`.
+- `libciadpi.so` is built as a static aarch64 PIE from ByeDPI v0.17.3 and
+  packaged with a `.so` name so Android extracts it as executable.
 - Current ByeDPI presets are based on the upstream v0.17.x options and examples
   (`fake-tls-mod`, `tlsminor`, `auto-mode`, adaptive fake/OOB chains):
   https://github.com/hufrea/byedpi and
@@ -141,11 +133,8 @@ JAVA_HOME=/opt/android-studio/jbr ./gradlew assembleDebug
 Rebuild native executables with:
 
 ```bash
-ANDROID_SDK_ROOT="$HOME/Android/Sdk" scripts/build-native.sh arm64-v8a
-ANDROID_SDK_ROOT="$HOME/Android/Sdk" scripts/build-native.sh x86_64   # emulator only
+ANDROID_SDK_ROOT="$HOME/Android/Sdk" scripts/build-native-arm64.sh
 ```
-
-`scripts/build-native-arm64.sh` remains as an alias for the arm64 build.
 
 Output:
 

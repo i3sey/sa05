@@ -43,19 +43,8 @@ class VpnModeTest {
     fun betaModesAreMarkedAndProxyOnlyIsDefaultStableMode() {
         assertTrue(VpnBackend.FULL_AUTO.title.contains("[BETA]"))
         assertTrue(VpnBackend.LOCAL_BYPASS.title.contains("[BETA]"))
-        // The stable mode carries no beta marker; its exact wording is free to change.
-        assertTrue(!VpnBackend.PROXY_ONLY.title.contains("[BETA]"))
+        assertEquals("Только прокси", VpnBackend.PROXY_ONLY.title)
         assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName(null))
-    }
-
-    @Test
-    fun everyModeExplainsItself() {
-        // The picker shows title plus description; a mode with neither is a mode nobody can
-        // choose on purpose.
-        VpnBackend.entries.forEach { backend ->
-            assertTrue(backend.name, backend.title.isNotBlank())
-            assertTrue(backend.name, backend.description.length > 20)
-        }
     }
 
     @Test

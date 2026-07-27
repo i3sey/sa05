@@ -41,7 +41,6 @@ internal data class XraySettings(
     val dynamicColor: Boolean = true,
     val advancedModeEnabled: Boolean = false,
     val vpnBackend: VpnBackend = VpnBackend.PROXY_ONLY,
-    val allowIpv6Bypass: Boolean = false,
     val zapretPreset: ZapretPreset = ZapretPreset.AUTO,
     val zapretCustomArguments: String = "",
     val telegramCfEnabled: Boolean = true,
@@ -50,10 +49,7 @@ internal data class XraySettings(
     val telegramProxyApplied: Boolean = false,
     val telegramProxyExplainerSeen: Boolean = false,
     val zapretAutoCaches: List<ZapretAutoCache> = emptyList(),
-    val youtubeAutoCaches: List<ZapretAutoCache> = emptyList(),
-    val strategyMemories: List<StrategyMemory> = emptyList(),
-    val lanSharingEnabled: Boolean = false,
-    val lanSharingPassword: String = ""
+    val youtubeAutoCaches: List<ZapretAutoCache> = emptyList()
 )
 
 object XrayPreferences {
@@ -63,7 +59,6 @@ object XrayPreferences {
     private const val KEY_DYNAMIC_COLOR = "dynamic_color"
     private const val KEY_ADVANCED_MODE = "advanced_mode"
     private const val KEY_VPN_BACKEND = "vpn_backend"
-    private const val KEY_ALLOW_IPV6_BYPASS = "allow_ipv6_bypass"
     private const val KEY_ZAPRET_PRESET = "zapret_preset"
     private const val KEY_ZAPRET_CACHE_NETWORK = "zapret_cache_network"
     private const val KEY_ZAPRET_CACHE_PRESET = "zapret_cache_preset"
@@ -80,9 +75,6 @@ object XrayPreferences {
     private const val KEY_TELEGRAM_SECRET = "telegram_secret"
     private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
     private const val KEY_TELEGRAM_EXPLAINER_SEEN = "telegram_explainer_seen"
-    private const val KEY_STRATEGY_DB = "strategy_db"
-    private const val KEY_LAN_SHARING = "lan_sharing_enabled"
-    private const val KEY_LAN_SHARING_PASSWORD = "lan_sharing_password"
     private const val MAX_NETWORK_CACHE_ENTRIES = 16
 
     internal val defaultConfig = """
@@ -114,7 +106,6 @@ object XrayPreferences {
     private val dynamicColorKey = booleanPreferencesKey(KEY_DYNAMIC_COLOR)
     private val advancedModeKey = booleanPreferencesKey(KEY_ADVANCED_MODE)
     private val vpnBackendKey = stringPreferencesKey(KEY_VPN_BACKEND)
-    private val allowIpv6BypassKey = booleanPreferencesKey(KEY_ALLOW_IPV6_BYPASS)
     private val zapretPresetKey = stringPreferencesKey(KEY_ZAPRET_PRESET)
     private val zapretCustomArgumentsKey = stringPreferencesKey(KEY_ZAPRET_CUSTOM_ARGUMENTS)
     private val telegramCfEnabledKey = booleanPreferencesKey(KEY_TELEGRAM_CF_ENABLED)
@@ -131,9 +122,6 @@ object XrayPreferences {
     private val youtubeCacheNetworkKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_NETWORK)
     private val youtubeCachePresetKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_PRESET)
     private val youtubeCacheVersionKey = intPreferencesKey(KEY_YOUTUBE_CACHE_VERSION)
-    private val strategyDbKey = stringPreferencesKey(KEY_STRATEGY_DB)
-    private val lanSharingKey = booleanPreferencesKey(KEY_LAN_SHARING)
-    private val lanSharingPasswordKey = stringPreferencesKey(KEY_LAN_SHARING_PASSWORD)
 
     internal fun migrations(
         context: Context,
@@ -153,7 +141,6 @@ object XrayPreferences {
             dynamicColor = preferences[dynamicColorKey] ?: true,
             advancedModeEnabled = preferences[advancedModeKey] ?: false,
             vpnBackend = VpnBackend.fromStoredName(preferences[vpnBackendKey]),
-            allowIpv6Bypass = preferences[allowIpv6BypassKey] ?: false,
             zapretPreset = ZapretPreset.fromName(preferences[zapretPresetKey]),
             zapretCustomArguments = preferences[zapretCustomArgumentsKey].orEmpty(),
             telegramCfEnabled = preferences[telegramCfEnabledKey] ?: true,
@@ -162,10 +149,7 @@ object XrayPreferences {
             telegramProxyApplied = preferences[telegramAppliedKey] ?: false,
             telegramProxyExplainerSeen = preferences[telegramExplainerSeenKey] ?: false,
             zapretAutoCaches = migratedZapretAutoCaches(preferences),
-            youtubeAutoCaches = migratedYoutubeAutoCaches(preferences),
-            strategyMemories = StrategyDatabase.decode(preferences[strategyDbKey]),
-            lanSharingEnabled = preferences[lanSharingKey] ?: false,
-            lanSharingPassword = preferences[lanSharingPasswordKey].orEmpty()
+            youtubeAutoCaches = migratedYoutubeAutoCaches(preferences)
         )
     }
 
@@ -200,10 +184,6 @@ object XrayPreferences {
     suspend fun saveVpnBackend(context: Context, backend: VpnBackend) {
         dataStore(context).edit { it[vpnBackendKey] = backend.name }
         VpnRuntimeState.requestTileRefresh(context)
-    }
-
-    suspend fun saveAllowIpv6Bypass(context: Context, enabled: Boolean) {
-        dataStore(context).edit { it[allowIpv6BypassKey] = enabled }
     }
 
     suspend fun saveZapretPreset(context: Context, preset: ZapretPreset) {
@@ -245,65 +225,6 @@ object XrayPreferences {
 
     suspend fun markTelegramProxyExplainerSeen(context: Context) {
         dataStore(context).edit { it[telegramExplainerSeenKey] = true }
-    }
-
-    /**
-     * Enabling sharing always rotates the password: a credential that survived being turned off
-     * and on again could still be sitting in someone else's proxy settings.
-     */
-    suspend fun saveLanSharingEnabled(context: Context, enabled: Boolean) {
-        dataStore(context).edit { preferences ->
-            preferences[lanSharingKey] = enabled
-            if (enabled) {
-                preferences[lanSharingPasswordKey] = generateLanProxyPassword()
-            } else {
-                preferences.remove(lanSharingPasswordKey)
-            }
-        }
-    }
-
-    suspend fun rotateLanSharingPassword(context: Context) {
-        dataStore(context).edit { it[lanSharingPasswordKey] = generateLanProxyPassword() }
-    }
-
-    internal suspend fun strategyMemory(
-        context: Context,
-        fingerprintKey: String,
-        algorithmVersion: Int,
-        nowMillis: Long = System.currentTimeMillis()
-    ): StrategyMemory? = StrategyDatabase.lookup(
-        entries = snapshot(context).strategyMemories,
-        fingerprintKey = fingerprintKey,
-        algorithmVersion = algorithmVersion,
-        nowMillis = nowMillis
-    )
-
-    internal suspend fun saveStrategyMemory(context: Context, entry: StrategyMemory) {
-        dataStore(context).edit { preferences ->
-            val current = StrategyDatabase.decode(preferences[strategyDbKey])
-            val pruned = StrategyDatabase.prune(current, entry.updatedAtMillis)
-            preferences[strategyDbKey] =
-                StrategyDatabase.encode(StrategyDatabase.upsert(pruned, entry))
-        }
-    }
-
-    /** Import is advisory: [StrategyDatabase.merge] keeps better local knowledge. */
-    internal suspend fun mergeStrategyMemories(context: Context, imported: List<StrategyMemory>): Int {
-        var added = 0
-        dataStore(context).edit { preferences ->
-            val current = StrategyDatabase.decode(preferences[strategyDbKey])
-            val merged = StrategyDatabase.merge(current, imported)
-            added = merged.size - current.size
-            preferences[strategyDbKey] = StrategyDatabase.encode(merged)
-        }
-        return added
-    }
-
-    internal suspend fun exportStrategyMemories(context: Context): String =
-        StrategyDatabase.encode(snapshot(context).strategyMemories)
-
-    internal suspend fun clearStrategyMemories(context: Context) {
-        dataStore(context).edit { it.remove(strategyDbKey) }
     }
 
     suspend fun zapretAutoCache(context: Context, networkKey: String): ZapretAutoCache? =
