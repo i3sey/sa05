@@ -309,6 +309,43 @@ object ZapretCommand {
     }
 }
 
+/**
+ * Command line for BadVPN tun2socks.
+ *
+ * [ipv6] must follow the TUN plan: the interface only carries an IPv6 address when the bypass
+ * switch is off, and tun2socks needs its own address on that subnet to accept those packets.
+ * Without `--netif-ip6addr` the IPv6 half of the interface is a black hole — packets enter it,
+ * tun2socks logs "missing ipv6 address" and drops them, and the application waits out its own
+ * connect timeout instead of falling back to IPv4. Telegram, which prefers its IPv6 datacentres
+ * whenever the system offers a global address, then hangs in "Соединение…" on every resume.
+ *
+ * With the address configured, an IPv6 flow becomes a SOCKS5 CONNECT with an IPv6 destination:
+ * the server dials it, or refuses it right away and the application falls back at once.
+ */
+object Tun2socksCommand {
+    fun build(
+        binary: String,
+        socksPort: Int,
+        socketPath: String,
+        ipv6: Boolean
+    ): List<String> {
+        require(socksPort in 1..65535)
+        return buildList {
+            add(binary)
+            add("--netif-ipaddr"); add(TUN2SOCKS_IPV4_ADDRESS)
+            add("--netif-netmask"); add(TUN2SOCKS_IPV4_NETMASK)
+            add("--socks-server-addr"); add("127.0.0.1:$socksPort")
+            add("--tunmtu"); add(TUN_MTU.toString())
+            add("--sock-path"); add(socketPath)
+            add("--enable-udprelay")
+            if (ipv6) {
+                add("--netif-ip6addr"); add(TUN2SOCKS_IPV6_ADDRESS)
+            }
+            add("--loglevel"); add("notice")
+        }
+    }
+}
+
 object ZapretBridgeConfig {
     fun build(inboundPort: Int, upstreamPort: Int): String {
         require(inboundPort in 1..65535)

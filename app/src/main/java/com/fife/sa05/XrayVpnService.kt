@@ -1257,14 +1257,14 @@ class XrayVpnService : VpnService() {
         val socketFile = File(filesDir, "tun2socks.sock")
         socketFile.delete()
         tun2socksProcess = ProcessBuilder(
-            binary.absolutePath,
-            "--netif-ipaddr", "10.10.10.2",
-            "--netif-netmask", "255.255.255.252",
-            "--socks-server-addr", "127.0.0.1:$socksPort",
-            "--tunmtu", "1500",
-            "--sock-path", socketFile.absolutePath,
-            "--enable-udprelay",
-            "--loglevel", "notice"
+            Tun2socksCommand.build(
+                binary = binary.absolutePath,
+                socksPort = socksPort,
+                socketPath = socketFile.absolutePath,
+                // Matches what createTun put on the interface: an IPv6 address is only there
+                // when the bypass switch is off, and it must not be a black hole.
+                ipv6 = !runningSettings.allowIpv6Bypass
+            )
         )
             .directory(filesDir)
             .redirectErrorStream(true)

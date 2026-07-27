@@ -194,7 +194,9 @@ echo "Building TG WS Proxy for $abi"
 echo "Validating native outputs"
 python3 "$repo_root/scripts/check-elf-16kb.py" --abis "$abi" "$staging"/*.so
 
-for option in --tunfd --sock-path --socks-server-addr; do
+# --netif-ip6addr is not optional here: without it the TUN's IPv6 half is a black hole and
+# applications that prefer IPv6 stall on every connection.
+for option in --tunfd --sock-path --socks-server-addr --netif-ip6addr; do
     strings "$staging/libtun2socks.so" | grep -F -- "$option" >/dev/null || {
         echo "libtun2socks.so does not expose required option $option" >&2
         exit 1

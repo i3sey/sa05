@@ -12,6 +12,11 @@ internal const val TUN_IPV4_PREFIX = 30
 internal const val TUN_IPV6_ADDRESS = "fd00::1"
 internal const val TUN_IPV6_PREFIX = 126
 
+/** tun2socks' own addresses on the TUN subnets, one hop up from the interface's own. */
+internal const val TUN2SOCKS_IPV4_ADDRESS = "10.10.10.2"
+internal const val TUN2SOCKS_IPV4_NETMASK = "255.255.255.252"
+internal const val TUN2SOCKS_IPV6_ADDRESS = "fd00::2"
+
 internal data class TunAddress(val address: String, val prefixLength: Int)
 
 internal data class TunRoute(val address: String, val prefixLength: Int)
