@@ -1,6 +1,7 @@
 package com.fife.sa05
 
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.Manifest
@@ -10,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -255,6 +257,20 @@ private fun AppNavigationBar(
     }
 }
 
+// Standalone Telegram proxy is a plain foreground service (no VpnService tunnel protection), so OEM battery managers reap it fast unless whitelisted.
+private fun requestIgnoreBatteryOptimizations(context: Context) {
+    val powerManager = context.getSystemService(PowerManager::class.java) ?: return
+    if (powerManager.isIgnoringBatteryOptimizations(context.packageName)) return
+    runCatching {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:${context.packageName}")
+            )
+        )
+    }
+}
+
 @Composable
 private fun XrayScreen(
     apps: List<InstalledApp>,
@@ -346,6 +362,7 @@ private fun XrayScreen(
 
     fun startTelegramOnly() {
         if (telegramRuntime.status == TelegramProxyRunStatus.STARTING) return
+        requestIgnoreBatteryOptimizations(context)
         telegramStartRequested = true
         scope.launch {
             if (!BackendController.startTelegramOnly(context)) {
