@@ -21,6 +21,23 @@ class NetworkRecoveryPolicyTest {
     }
 
     @Test
+    fun `dns changes on the same interface are not a network change`() {
+        val wifi = vpnNetworkKey(1L, "wifi", "wlan0")
+        assertEquals(wifi, vpnNetworkKey(1L, "wifi", "wlan0"))
+        assertEquals(
+            NetworkRecoveryDecision.NONE,
+            NetworkRecoveryPolicy.networkChanged(wifi, vpnNetworkKey(1L, "wifi", "wlan0"))
+        )
+        assertEquals(
+            NetworkRecoveryDecision.VERIFY_ROUTE,
+            NetworkRecoveryPolicy.networkChanged(
+                wifi,
+                vpnNetworkKey(1L, "mobile", "rmnet0")
+            )
+        )
+    }
+
+    @Test
     fun `an unhealthy route reconnects only within the automatic retry budget`() {
         assertEquals(
             NetworkRecoveryDecision.NONE,

@@ -122,6 +122,7 @@ object VpnRuntimeState {
     }
 
     fun publish(context: Context, snapshot: VpnRuntimeSnapshot) {
+        val previous = if (initialized) _updates.value else null
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_STATUS, snapshot.status.name)
@@ -135,10 +136,17 @@ object VpnRuntimeState {
             .putLong(KEY_CONNECTED_AT, snapshot.connectedAtMillis)
             .putInt(KEY_RECOVERY_ATTEMPT, snapshot.automaticRecoveryAttempt)
             .putString(KEY_COMPONENTS, encodeComponents(snapshot.components))
-            .commit()
+            .apply()
         initialized = true
         _updates.value = snapshot
-        requestTileRefresh(context)
+        if (
+            previous == null ||
+            previous.status != snapshot.status ||
+            previous.backend != snapshot.backend ||
+            previous.profileName != snapshot.profileName
+        ) {
+            requestTileRefresh(context)
+        }
     }
 
     fun write(

@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
-import android.net.LinkProperties
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.net.Network
@@ -52,7 +51,7 @@ class XrayVpnService : VpnService() {
         private const val YOUTUBE_AUTO_ALGORITHM_VERSION = 3
         private const val NETWORK_DEBOUNCE_MS = 1_500L
         private const val RECOVERY_RETRY_MS = 3_000L
-        private const val PROCESS_MONITOR_MS = 3_000L
+        private const val PROCESS_MONITOR_MS = 30_000L
         private val _socksPort = MutableStateFlow<Int?>(null)
         val socksPort = _socksPort.asStateFlow()
         private val _zapretAutoProgress = MutableStateFlow(ZapretAutoProgress())
@@ -114,14 +113,6 @@ class XrayVpnService : VpnService() {
         override fun onAvailable(network: Network) = scheduleNetworkRecoveryCheck()
 
         override fun onLost(network: Network) = scheduleNetworkRecoveryCheck()
-
-        override fun onCapabilitiesChanged(
-            network: Network,
-            networkCapabilities: NetworkCapabilities
-        ) = scheduleNetworkRecoveryCheck()
-
-        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) =
-            scheduleNetworkRecoveryCheck()
     }
 
     override fun onCreate() {
@@ -305,9 +296,13 @@ class XrayVpnService : VpnService() {
         } else {
             XrayConfig.validate(rawConfig)
         }
+        var runtimeJson = XrayConfig.quietRuntime(validated.runtimeJson)
+        if (!fullAuto && runningBackend == VpnBackend.PROXY_ONLY) {
+            runtimeJson = XrayConfig.blockUdp443(runtimeJson)
+        }
         copyGeoAssets()
         val configFile = File(filesDir, "config.json").apply {
-            writeText(validated.runtimeJson)
+            writeText(runtimeJson)
         }
         val binary = File(applicationInfo.nativeLibraryDir, "libxray.so")
         check(binary.exists()) { "libxray.so не найден" }
@@ -812,48 +807,23 @@ class XrayVpnService : VpnService() {
 
     private suspend fun verifyRouteAfterNetworkChange(network: ActiveNetwork) {
         val generation = startGeneration.get()
-        val previous = VpnRuntimeState.read(this)
-        publishRuntime(
-            status = VpnRunStatus.RECOVERING,
-            message = "Проверяем маршрут через ${network.type.title}",
-            connectedAtMillis = previous.connectedAtMillis,
-            components = componentSnapshots()
-        )
-        startForegroundNow("Проверка VPN-маршрута")
         val port = _socksPort.value
         val healthy = port != null && requiredProcessesRunning() && runCatching {
-            val results = ConnectivityDiagnostics().runSocks(
+            ConnectivityDiagnostics().runSocks(
                 port,
                 resolveForSocks = runningBackend == VpnBackend.LOCAL_BYPASS,
-                targetsToTest = ConnectivityDiagnostics.autoTargets
-            )
-            ConnectivityDiagnostics.bypassWorks(results)
+                targetsToTest = listOf(ConnectivityDiagnostics.target("google"))
+            ).single().reachable
         }.getOrDefault(false)
         if (generation != startGeneration.get()) return
         when (NetworkRecoveryPolicy.routeChecked(healthy, automaticAttempts = 0)) {
             NetworkRecoveryDecision.NONE -> {
                 activeNetworkKey = network.key
-                publishRuntime(
-                    status = VpnRunStatus.CONNECTED,
-                    message = "Маршрут восстановлен без переподключения",
-                    connectedAtMillis = previous.connectedAtMillis,
-                    components = componentSnapshots()
-                )
-                startForegroundNow(STATE_CONNECTED)
                 if (runningBackend == VpnBackend.FULL_AUTO && port != null) {
                     refreshFullAutoForNetwork(generation, port)
                 }
             }
             NetworkRecoveryDecision.RECONNECT -> beginStart(recoveryAttempt = 1)
-            NetworkRecoveryDecision.FAIL -> {
-                publishRuntime(
-                    status = VpnRunStatus.ERROR,
-                    message = "Проверка маршрута не пройдена",
-                    failureKind = VpnFailureKind.HEALTH_CHECK,
-                    components = componentSnapshots(failed = true)
-                )
-                startForegroundNow("Нужна проверка")
-            }
             else -> Unit
         }
     }
@@ -875,44 +845,23 @@ class XrayVpnService : VpnService() {
         processMonitorJob = scope.launch {
             while (true) {
                 delay(PROCESS_MONITOR_MS)
-                val runtime = VpnRuntimeState.read(this@XrayVpnService)
-                if (runtime.status != VpnRunStatus.CONNECTED) continue
                 if (networkRecoveryJob?.isActive == true) continue
                 if (runningBackend == VpnBackend.FULL_AUTO &&
                     fullAutoOptimizationJob?.isActive == true
-                ) {
-                    val components = componentSnapshots()
-                    if (components != runtime.components) {
-                        publishRuntime(
-                            status = VpnRunStatus.CONNECTED,
-                            message = runtime.message,
-                            connectedAtMillis = runtime.connectedAtMillis,
-                            components = components
-                        )
-                    }
-                    continue
-                }
-                if (!requiredProcessesRunning()) {
-                    publishRuntime(
-                        status = VpnRunStatus.RECOVERING,
-                        message = "Один из компонентов VPN остановился",
-                        failureKind = VpnFailureKind.BACKEND,
-                        connectedAtMillis = runtime.connectedAtMillis,
-                        components = componentSnapshots(failed = true)
-                    )
-                    startForegroundNow("Восстановление VPN")
-                    beginStart(recoveryAttempt = 1)
-                    return@launch
-                }
-                val components = componentSnapshots()
-                if (components != runtime.components) {
-                    publishRuntime(
-                        status = VpnRunStatus.CONNECTED,
-                        message = runtime.message,
-                        connectedAtMillis = runtime.connectedAtMillis,
-                        components = components
-                    )
-                }
+                ) continue
+                if (requiredProcessesRunning()) continue
+                val runtime = VpnRuntimeState.read(this@XrayVpnService)
+                if (runtime.status != VpnRunStatus.CONNECTED) continue
+                publishRuntime(
+                    status = VpnRunStatus.RECOVERING,
+                    message = "Один из компонентов VPN остановился",
+                    failureKind = VpnFailureKind.BACKEND,
+                    connectedAtMillis = runtime.connectedAtMillis,
+                    components = componentSnapshots(failed = true)
+                )
+                startForegroundNow("Восстановление VPN")
+                beginStart(recoveryAttempt = 1)
+                return@launch
             }
         }
     }
@@ -1005,12 +954,11 @@ class XrayVpnService : VpnService() {
             VpnNetworkType.NONE -> "none"
         }
         return ActiveNetwork(
-            key = buildString {
-                append(network.networkHandle)
-                append('|').append(transportKey)
-                append('|').append(link?.interfaceName.orEmpty())
-                append('|').append(link?.dnsServers?.joinToString(",").orEmpty())
-            },
+            key = vpnNetworkKey(
+                network.networkHandle,
+                transportKey,
+                link?.interfaceName.orEmpty()
+            ),
             type = type
         )
     }
@@ -1051,7 +999,7 @@ class XrayVpnService : VpnService() {
             "--tunmtu", "1500",
             "--sock-path", socketFile.absolutePath,
             "--enable-udprelay",
-            "--loglevel", "notice"
+            "--loglevel", "none"
         )
             .directory(filesDir)
             .redirectErrorStream(true)
@@ -1102,7 +1050,7 @@ class XrayVpnService : VpnService() {
         scope.launch {
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { Log.i(tag, it) }
+                    lines.forEach { _ -> }
                 }
             } catch (e: Exception) {
                 val closedDuringStop = e is InterruptedIOException ||

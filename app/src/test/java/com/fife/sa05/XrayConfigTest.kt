@@ -326,6 +326,39 @@ class XrayConfigTest {
     }
 
     @Test
+    fun quietRuntimeStripsBackgroundProbesAndLowersLogLevel() {
+        val noisy = JSONObject(config)
+            .put("observatory", JSONObject().put("probeUrl", "https://example.com"))
+            .put("api", JSONObject().put("tag", "api"))
+            .put("stats", JSONObject())
+            .put("metrics", JSONObject())
+            .put("log", JSONObject().put("loglevel", "debug"))
+            .toString()
+        val root = JSONObject(XrayConfig.quietRuntime(noisy))
+
+        assertFalse(root.has("burstObservatory"))
+        assertFalse(root.has("observatory"))
+        assertFalse(root.has("api"))
+        assertFalse(root.has("stats"))
+        assertFalse(root.has("metrics"))
+        assertEquals("error", root.getJSONObject("log").getString("loglevel"))
+        assertEquals(
+            "vless",
+            root.getJSONArray("outbounds").getJSONObject(0).getString("protocol")
+        )
+    }
+
+    @Test
+    fun blockUdp443ReusesExistingBlackholeAndPrependsTheRule() {
+        val root = JSONObject(XrayConfig.blockUdp443(beelineConfig))
+        val rule = root.getJSONObject("routing").getJSONArray("rules").getJSONObject(0)
+
+        assertEquals("udp", rule.getString("network"))
+        assertEquals("443", rule.getString("port"))
+        assertEquals("block", rule.getString("outboundTag"))
+    }
+
+    @Test
     fun fullAutoEnablesSniffingAndAvoidsProviderTagCollisions() {
         val root = JSONObject(config)
         root.getJSONArray("outbounds")

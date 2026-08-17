@@ -8,6 +8,12 @@ internal enum class NetworkRecoveryDecision {
     FAIL
 }
 
+internal fun vpnNetworkKey(
+    networkHandle: Long,
+    transport: String,
+    interfaceName: String
+): String = "$networkHandle|$transport|$interfaceName"
+
 internal object NetworkRecoveryPolicy {
     const val MAX_AUTOMATIC_ATTEMPTS = 2
 

@@ -72,6 +72,56 @@ object XrayConfig {
         )
     }
 
+    fun quietRuntime(raw: String): String {
+        val root = parse(raw)
+        listOf("observatory", "burstObservatory", "api", "stats", "metrics").forEach {
+            root.remove(it)
+        }
+        val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
+        log.put("loglevel", "error")
+        return root.toString(2)
+    }
+
+    fun blockUdp443(raw: String): String {
+        val root = parse(raw)
+        val outbounds = root.optJSONArray("outbounds") ?: JSONArray().also {
+            root.put("outbounds", it)
+        }
+        val tags = (0 until outbounds.length()).mapNotNull {
+            outbounds.optJSONObject(it)?.optString("tag")?.takeIf(String::isNotBlank)
+        }.toMutableSet()
+        val blockTag = (0 until outbounds.length()).firstNotNullOfOrNull { index ->
+            val outbound = outbounds.optJSONObject(index) ?: return@firstNotNullOfOrNull null
+            outbound.optString("tag").takeIf {
+                it.isNotBlank() && outbound.optString("protocol") == "blackhole"
+            }
+        } ?: run {
+            var tag = "__sa05_quic_block"
+            var suffix = 2
+            while (!tags.add(tag)) tag = "__sa05_quic_block-$suffix".also { suffix++ }
+            outbounds.put(
+                JSONObject()
+                    .put("tag", tag)
+                    .put("protocol", "blackhole")
+            )
+            tag
+        }
+        val routing = root.optJSONObject("routing") ?: JSONObject().also {
+            root.put("routing", it)
+        }
+        val existing = routing.optJSONArray("rules") ?: JSONArray()
+        val rules = JSONArray().put(
+            JSONObject()
+                .put("type", "field")
+                .put("network", "udp")
+                .put("port", "443")
+                .put("outboundTag", blockTag)
+        )
+        for (index in 0 until existing.length()) rules.put(existing.get(index))
+        routing.put("rules", rules)
+        return root.toString(2)
+    }
+
     fun extractHosts(raw: String): List<XrayHost> {
         val root = parse(raw)
         val outbounds = root.optJSONArray("outbounds") ?: return emptyList()
