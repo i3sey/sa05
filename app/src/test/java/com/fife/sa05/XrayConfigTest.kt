@@ -326,7 +326,7 @@ class XrayConfigTest {
     }
 
     @Test
-    fun quietRuntimeStripsBackgroundProbesAndLowersLogLevel() {
+    fun quietRuntimeKeepsObservatoryAndLowersLogLevel() {
         val noisy = JSONObject(config)
             .put("observatory", JSONObject().put("probeUrl", "https://example.com"))
             .put("api", JSONObject().put("tag", "api"))
@@ -336,8 +336,8 @@ class XrayConfigTest {
             .toString()
         val root = JSONObject(XrayConfig.quietRuntime(noisy))
 
-        assertFalse(root.has("burstObservatory"))
-        assertFalse(root.has("observatory"))
+        assertTrue(root.has("burstObservatory"))
+        assertTrue(root.has("observatory"))
         assertFalse(root.has("api"))
         assertFalse(root.has("stats"))
         assertFalse(root.has("metrics"))
@@ -345,6 +345,42 @@ class XrayConfigTest {
         assertEquals(
             "vless",
             root.getJSONArray("outbounds").getJSONObject(0).getString("protocol")
+        )
+    }
+
+    @Test
+    fun quietRuntimeKeepsLeastPingBalancerObservatory() {
+        val withBalancer = JSONObject(config)
+            .put("observatory", JSONObject().put("subjectSelector", org.json.JSONArray().put("proxy")))
+            .put(
+                "routing",
+                JSONObject().put(
+                    "balancers",
+                    org.json.JSONArray().put(
+                        JSONObject()
+                            .put("tag", "main")
+                            .put("selector", org.json.JSONArray().put("proxy"))
+                            .put("strategy", JSONObject().put("type", "leastPing"))
+                    )
+                )
+            )
+            .toString()
+        val runtime = JSONObject(
+            XrayConfig.blockUdp443(XrayConfig.quietRuntime(withBalancer))
+        )
+
+        assertTrue(runtime.has("observatory"))
+        assertEquals(
+            "leastPing",
+            runtime.getJSONObject("routing")
+                .getJSONArray("balancers")
+                .getJSONObject(0)
+                .getJSONObject("strategy")
+                .getString("type")
+        )
+        assertEquals(
+            "udp",
+            runtime.getJSONObject("routing").getJSONArray("rules").getJSONObject(0).getString("network")
         )
     }
 

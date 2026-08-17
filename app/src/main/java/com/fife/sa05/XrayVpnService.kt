@@ -35,6 +35,7 @@ import java.io.InterruptedIOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 class XrayVpnService : VpnService() {
     companion object {
@@ -93,6 +94,7 @@ class XrayVpnService : VpnService() {
     @Volatile
     private var telegramStarted = false
     private val startGeneration = AtomicLong()
+    private val lastNativeError = AtomicReference("")
     private val startMutex = Mutex()
     private data class BackendStart(val socksPort: Int, val tunnelReady: Boolean = false)
     private data class AutoPresetResolution(
@@ -306,6 +308,7 @@ class XrayVpnService : VpnService() {
         }
         val binary = File(applicationInfo.nativeLibraryDir, "libxray.so")
         check(binary.exists()) { "libxray.so не найден" }
+        lastNativeError.set("")
         proxyProcess = ProcessBuilder(
             binary.absolutePath,
             "run",
@@ -1035,7 +1038,17 @@ class XrayVpnService : VpnService() {
     private suspend fun waitForPort(process: Process, port: Int, timeoutMs: Long) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            if (!isProcessAlive(process)) error("Прокси завершился при запуске")
+            if (!isProcessAlive(process)) {
+                delay(150)
+                val detail = lastNativeError.get().trim()
+                error(
+                    if (detail.isEmpty()) {
+                        "Прокси завершился при запуске"
+                    } else {
+                        "Прокси завершился при запуске: $detail"
+                    }
+                )
+            }
             try {
                 Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 100) }
                 return
@@ -1050,7 +1063,15 @@ class XrayVpnService : VpnService() {
         scope.launch {
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { _ -> }
+                    lines.forEach { line ->
+                        val lower = line.lowercase()
+                        if ("error" in lower || "failed" in lower ||
+                            "invalid" in lower || "fatal" in lower
+                        ) {
+                            lastNativeError.set(line)
+                            Log.w(tag, line)
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 val closedDuringStop = e is InterruptedIOException ||

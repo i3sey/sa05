@@ -74,9 +74,7 @@ object XrayConfig {
 
     fun quietRuntime(raw: String): String {
         val root = parse(raw)
-        listOf("observatory", "burstObservatory", "api", "stats", "metrics").forEach {
-            root.remove(it)
-        }
+        listOf("api", "stats", "metrics").forEach { root.remove(it) }
         val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
         log.put("loglevel", "error")
         return root.toString(2)
