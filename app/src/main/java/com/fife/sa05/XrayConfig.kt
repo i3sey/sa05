@@ -281,6 +281,110 @@ object XrayConfig {
         return ValidatedXrayConfig(root.toString(2), validated.socksPort)
     }
 
+    /**
+     * Runtime-конфиг для режима CDN-туннеля (yctun).
+     *
+     * Весь TCP-трафик уходит в локальный relayc (соцеты из профиля больше не
+     * используются, их правила роутинга заменяются). relayc принимает только
+     * SOCKS CONNECT, поэтому:
+     *  - DNS обслуживает встроенный модуль Xray через DoH на IP-литерал
+     *    (https://8.8.8.8/dns-query) — хостнейм не резолвится, рекурсии через
+     *    сам туннель нет; запросы клиентов на udp/tcp 53 уходят в outbound
+     *    «dns»;
+     *  - остальной UDP (QUIC, игры) уходит в blackhole — TCP-фолбэк
+     *    как в остальных режимах приложения;
+     *  - приватные подсети идут напрямую (freedom).
+     *
+     * Провайдерские outbounds остаются в конфиге нетронутыми (pass-through), но
+     * недостижимы: дефолтный outbound — туннель, правила провайдера удалены.
+     * Служебный блок `sa05_yctun` вырезается перед запуском Xray.
+     */
+    fun buildYctunConfig(raw: String, relaycPort: Int): ValidatedXrayConfig {
+        require(relaycPort in 1..65535)
+        val root = parse(raw)
+        val validated = validate(raw)
+        root.remove(YctunParams.BLOCK_KEY)
+
+        val existingOutbounds = root.optJSONArray("outbounds") ?: JSONArray()
+        val tags = (0 until existingOutbounds.length()).mapNotNull {
+            existingOutbounds.optJSONObject(it)?.optString("tag")?.takeIf(String::isNotBlank)
+        }.toMutableSet()
+        fun uniqueTag(base: String): String {
+            var value = base
+            var suffix = 2
+            while (!tags.add(value)) value = "$base-${suffix++}"
+            return value
+        }
+        val tunnelTag = uniqueTag("__sa05_yctun")
+        val dnsTag = uniqueTag("__sa05_yctun_dns")
+        val directTag = uniqueTag("__sa05_yctun_direct")
+        val blockTag = uniqueTag("__sa05_yctun_block")
+
+        fun socksOutbound(tag: String, port: Int) = JSONObject()
+            .put("tag", tag)
+            .put("protocol", "socks")
+            .put(
+                "settings",
+                JSONObject().put(
+                    "servers",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("address", "127.0.0.1")
+                            .put("port", port)
+                    )
+                )
+            )
+
+        val outbounds = JSONArray()
+            .put(socksOutbound(tunnelTag, relaycPort)) // дефолтный outbound = туннель
+            .put(JSONObject().put("tag", dnsTag).put("protocol", "dns"))
+            .put(JSONObject().put("tag", directTag).put("protocol", "freedom"))
+            .put(JSONObject().put("tag", blockTag).put("protocol", "blackhole"))
+        for (index in 0 until existingOutbounds.length()) {
+            outbounds.put(existingOutbounds.get(index))
+        }
+        root.put("outbounds", outbounds)
+
+        // DNS: только DoH на IP-литерал — upstream-запросы уходят в туннель
+        // по дефолтному outbound, без резолва хостнейма самим днс-модулем.
+        root.put(
+            "dns",
+            JSONObject().put(
+                "servers",
+                JSONArray().put(
+                    JSONObject().put("address", "https://8.8.8.8/dns-query")
+                )
+            )
+        )
+
+        val routing = root.optJSONObject("routing") ?: JSONObject().also {
+            root.put("routing", it)
+        }
+        routing.put(
+            "rules",
+            JSONArray()
+                .put(
+                    JSONObject()
+                        .put("type", "field")
+                        .put("ip", JSONArray().put("geoip:private"))
+                        .put("outboundTag", directTag)
+                )
+                .put(
+                    JSONObject()
+                        .put("type", "field")
+                        .put("port", "53")
+                        .put("outboundTag", dnsTag)
+                )
+                .put(
+                    JSONObject()
+                        .put("type", "field")
+                        .put("network", "udp")
+                        .put("outboundTag", blockTag)
+                )
+        )
+        return ValidatedXrayConfig(root.toString(2), validated.socksPort)
+    }
+
     fun buildPingConfig(raw: String, host: XrayHost, socksPort: Int): XrayPingConfig {
         val root = parse(raw)
         val outbounds = root.optJSONArray("outbounds")

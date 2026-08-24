@@ -184,3 +184,25 @@ app/build/outputs/apk/debug/app-debug.apk
 - Local Bypass and Full Auto fail atomically if TG WS Proxy cannot start.
 - The app UID remains excluded from TUN, so TG WS WebSocket connections and
   Xray outbound sockets leave directly without looping into the VPN.
+- SA05 bundles a fourth native binary, `librelayc.so` (yctun client), and a
+  `YCTUN` VPN backend ("CDN-туннель"). It dials the internet through a
+  GET-only tunnel over the Yandex Cloud CDN: Xray -> relayc (:10812) ->
+  `https://dom.sa05.eu.cc` -> relayd on the origin VPS. Server side and the
+  wire protocol live in `third_party/yctun/` (see its PIN.md and README.md).
+- The tunnel credentials (`base_url`, `psk`, `server_pub`) are NOT embedded
+  in the APK. They arrive per-subscription in an optional top-level
+  `sa05_yctun` block inside a profile's JSON; Xray ignores the key, SA05
+  strips it via `XrayConfig.buildYctunConfig` before writing the runtime
+  config and stores the params only transiently in `filesDir/yctun.json`.
+- relayc accepts SOCKS CONNECT only (no UDP). The yctun runtime config
+  therefore routes client DNS into Xray's built-in DNS module with a DoH
+  upstream on an IP literal (`https://8.8.8.8/dns-query`) to avoid
+  recursion through the tunnel, sends all remaining UDP to blackhole
+  (TCP fallback), and sends private ranges direct. Provider outbounds stay
+  in the config untouched but unreachable: the tunnel outbound is first and
+  provider routing rules are replaced.
+- Rebuild the bundled client with `scripts/build-relayc-arm64.sh`
+  (pure Go, CGO disabled, 16 KB-page aligned; validated by
+  `scripts/check-elf-16kb.py`). If the mode is selected without a
+  `sa05_yctun` block or without `librelayc.so`, startup fails with a clear
+  message and `VpnFailureKind.BACKEND`.

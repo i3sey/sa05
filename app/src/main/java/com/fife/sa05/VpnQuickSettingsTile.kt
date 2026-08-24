@@ -133,6 +133,9 @@ class VpnQuickSettingsTile : TileService() {
         VpnBackend.FULL_AUTO ->
             "[BETA] " + settings.subscription.activeProfile?.remarks.orEmpty()
                 .ifBlank { "Xray" } + " + локальный обход"
+        VpnBackend.YCTUN ->
+            settings.subscription.activeProfile?.remarks.orEmpty()
+                .ifBlank { "Xray" } + " + CDN"
     }
 
     @SuppressLint("StartActivityAndCollapseDeprecated")

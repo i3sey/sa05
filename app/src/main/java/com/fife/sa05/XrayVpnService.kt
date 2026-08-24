@@ -48,6 +48,7 @@ class XrayVpnService : VpnService() {
         private const val NOTIFICATION_ID = 10
         private const val ZAPRET_SOCKS_PORT = 10810
         private const val ZAPRET_BRIDGE_PORT = 10811
+        private const val YCTUN_SOCKS_PORT = 10812
         private const val ZAPRET_AUTO_ALGORITHM_VERSION = 4
         private const val YOUTUBE_AUTO_ALGORITHM_VERSION = 3
         private const val NETWORK_DEBOUNCE_MS = 1_500L
@@ -81,6 +82,7 @@ class XrayVpnService : VpnService() {
     private var processMonitorJob: Job? = null
     private var tun: ParcelFileDescriptor? = null
     private var proxyProcess: Process? = null
+    private var relaycProcess: Process? = null
     private var auxiliaryProcess: Process? = null
     private var bridgeProcess: Process? = null
     private var tun2socksProcess: Process? = null
@@ -204,6 +206,7 @@ class XrayVpnService : VpnService() {
                         startTelegramProxy()
                         startFullAutoBackend()
                     }
+                    VpnBackend.YCTUN -> startYctunBackend()
                 }
                 check(generation == startGeneration.get()) { "Запуск отменён" }
                 _socksPort.value = backend.socksPort
@@ -224,6 +227,7 @@ class XrayVpnService : VpnService() {
                 if (runningBackend == VpnBackend.FULL_AUTO) {
                     launchFullAutoOptimization(generation, backend.socksPort)
                 } else if (runningBackend == VpnBackend.PROXY_ONLY ||
+                    runningBackend == VpnBackend.YCTUN ||
                     (runningBackend == VpnBackend.LOCAL_BYPASS &&
                         runningSettings.zapretPreset != ZapretPreset.AUTO)
                 ) {
@@ -289,17 +293,28 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private suspend fun startXrayBackend(fullAuto: Boolean = false): Int {
-        val rawConfig = XrayConfig.applyBeelinePadding(
-            runningProfile?.json ?: runningSettings.config
-        )
-        val validated = if (fullAuto) {
-            XrayConfig.buildFullAutoConfig(rawConfig, ZAPRET_BRIDGE_PORT)
+    private suspend fun startXrayBackend(
+        fullAuto: Boolean = false,
+        yctun: Boolean = false
+    ): Int {
+        val profileJson = runningProfile?.json ?: runningSettings.config
+        val validated = if (yctun) {
+            YctunParams.parse(profileJson)?.let {
+                XrayConfig.buildYctunConfig(profileJson, YCTUN_SOCKS_PORT)
+            } ?: error(
+                "Профиль не содержит блок ${YctunParams.BLOCK_KEY}: " +
+                    "режим CDN-туннель недоступен"
+            )
         } else {
-            XrayConfig.validate(rawConfig)
+            val rawConfig = XrayConfig.applyBeelinePadding(profileJson)
+            if (fullAuto) {
+                XrayConfig.buildFullAutoConfig(rawConfig, ZAPRET_BRIDGE_PORT)
+            } else {
+                XrayConfig.validate(rawConfig)
+            }
         }
         var runtimeJson = XrayConfig.quietRuntime(validated.runtimeJson)
-        if (!fullAuto && runningBackend == VpnBackend.PROXY_ONLY) {
+        if (!fullAuto && !yctun && runningBackend == VpnBackend.PROXY_ONLY) {
             runtimeJson = XrayConfig.blockUdp443(runtimeJson)
         }
         copyGeoAssets()
@@ -327,6 +342,37 @@ class XrayVpnService : VpnService() {
             XrayRuntime.PLAIN_PROFILE
         }
         return validated.socksPort
+    }
+
+    /**
+     * CDN-туннель: relayc (SOCKS5 на 127.0.0.1:10812, GET-запросы через
+     * Yandex Cloud CDN к relayd на VPS) + Xray поверх него.
+     */
+    private suspend fun startYctunBackend(): BackendStart {
+        val profileJson = runningProfile?.json ?: runningSettings.config
+        val params = YctunParams.parse(profileJson)
+            ?: error(
+                "Профиль не содержит блок ${YctunParams.BLOCK_KEY}: " +
+                    "режим CDN-туннель недоступен"
+            )
+        val binary = File(applicationInfo.nativeLibraryDir, "librelayc.so")
+        check(binary.exists()) { "librelayc.so не найден" }
+        val configFile = File(filesDir, "yctun.json").apply {
+            writeText(params.relaycConfig("127.0.0.1:$YCTUN_SOCKS_PORT"))
+        }
+        relaycProcess = ProcessBuilder(
+            binary.absolutePath,
+            "-config",
+            configFile.absolutePath
+        )
+            .directory(filesDir)
+            .redirectErrorStream(true)
+            .start()
+        pipeLogs("yctun", relaycProcess!!)
+        waitForPort(relaycProcess!!, YCTUN_SOCKS_PORT, 15_000)
+        val socksPort = startXrayBackend(yctun = true)
+        runningLabel = "${selectedProfileLabel()} · CDN-туннель"
+        return BackendStart(socksPort)
     }
 
     private suspend fun startZapretBackend(): BackendStart {
@@ -879,7 +925,8 @@ class XrayVpnService : VpnService() {
                 proxy = isProcessAlive(proxyProcess),
                 bridge = isProcessAlive(bridgeProcess),
                 auxiliary = isProcessAlive(auxiliaryProcess),
-                telegram = TelegramProxyRuntimeState.read(this).running
+                telegram = TelegramProxyRuntimeState.read(this).running,
+                yctun = isProcessAlive(relaycProcess)
             )
         )
     }
@@ -906,7 +953,9 @@ class XrayVpnService : VpnService() {
                     state(isProcessAlive(tun2socksProcess))
                 )
             )
-            if (runningBackend != VpnBackend.PROXY_ONLY) {
+            if (runningBackend != VpnBackend.PROXY_ONLY &&
+                runningBackend != VpnBackend.YCTUN
+            ) {
                 val byeDpi = when (runningBackend) {
                     VpnBackend.LOCAL_BYPASS -> state(isProcessAlive(proxyProcess))
                     VpnBackend.FULL_AUTO -> when {
@@ -925,6 +974,14 @@ class XrayVpnService : VpnService() {
                     )
                 )
             }
+            if (runningBackend == VpnBackend.YCTUN) {
+                add(
+                    VpnComponentSnapshot(
+                        VpnRuntimeComponent.YCTUN,
+                        state(isProcessAlive(relaycProcess))
+                    )
+                )
+            }
         }
     }
 
@@ -932,9 +989,14 @@ class XrayVpnService : VpnService() {
         add(VpnRuntimeComponent.XRAY)
         add(VpnRuntimeComponent.TUN)
         add(VpnRuntimeComponent.TUN2SOCKS)
-        if (runningBackend != VpnBackend.PROXY_ONLY) {
+        if (runningBackend != VpnBackend.PROXY_ONLY &&
+            runningBackend != VpnBackend.YCTUN
+        ) {
             add(VpnRuntimeComponent.BYEDPI)
             add(VpnRuntimeComponent.TELEGRAM)
+        }
+        if (runningBackend == VpnBackend.YCTUN) {
+            add(VpnRuntimeComponent.YCTUN)
         }
     }
 
@@ -1157,6 +1219,8 @@ class XrayVpnService : VpnService() {
         xrayRuntime = XrayRuntime.STOPPED
         closeProcess(auxiliaryProcess)
         auxiliaryProcess = null
+        closeProcess(relaycProcess)
+        relaycProcess = null
         runCatching { tun?.close() }
         tun = null
     }
@@ -1166,6 +1230,7 @@ class XrayVpnService : VpnService() {
         VpnBackend.LOCAL_BYPASS ->
             "[BETA] ${runningSettings.zapretPreset.title} · Telegram"
         VpnBackend.FULL_AUTO -> "[BETA] ${selectedProfileLabel()} · локальный обход"
+        VpnBackend.YCTUN -> "${selectedProfileLabel()} · CDN-туннель"
     }
 
     private fun selectedProfileLabel(): String =
@@ -1219,7 +1284,8 @@ class XrayVpnService : VpnService() {
             currentNetwork() == null -> VpnFailureKind.NETWORK
             "tun" in message -> VpnFailureKind.TUNNEL
             "proxy" in message || "прокси" in message || "xray" in message ||
-                "byedpi" in message || "telegram" in message -> VpnFailureKind.BACKEND
+                "byedpi" in message || "telegram" in message || "yctun" in message ||
+                "relayc" in message -> VpnFailureKind.BACKEND
             else -> VpnFailureKind.SERVICE
         }
     }

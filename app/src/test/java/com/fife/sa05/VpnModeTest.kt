@@ -27,6 +27,8 @@ class VpnModeTest {
         assertTrue(!VpnBackend.LOCAL_BYPASS.usesXrayProfile)
         assertTrue(!VpnBackend.PROXY_ONLY.usesTelegram)
         assertTrue(VpnBackend.PROXY_ONLY.usesXrayProfile)
+        assertTrue(!VpnBackend.YCTUN.usesTelegram)
+        assertTrue(VpnBackend.YCTUN.usesXrayProfile)
     }
 
     @Test
@@ -36,6 +38,7 @@ class VpnModeTest {
         assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("ZAPRET"))
         assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("TELEGRAM"))
         assertEquals(VpnBackend.FULL_AUTO, VpnBackend.fromStoredName("FULL_AUTO"))
+        assertEquals(VpnBackend.YCTUN, VpnBackend.fromStoredName("YCTUN"))
         assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName("unknown"))
     }
 

@@ -114,6 +114,36 @@ class VpnServicePolicyTest {
     }
 
     @Test
+    fun `yctun requires provider xray and relayc sidecar`() {
+        val healthy = healthyProcesses()
+
+        assertEquals(
+            true,
+            requiredProcessesRunning(
+                VpnBackend.YCTUN,
+                XrayRuntime.PLAIN_PROFILE,
+                healthy
+            )
+        )
+        assertEquals(
+            false,
+            requiredProcessesRunning(
+                VpnBackend.YCTUN,
+                XrayRuntime.PLAIN_PROFILE,
+                healthy.copy(proxy = false)
+            )
+        )
+        assertEquals(
+            false,
+            requiredProcessesRunning(
+                VpnBackend.YCTUN,
+                XrayRuntime.PLAIN_PROFILE,
+                healthy.copy(yctun = false)
+            )
+        )
+    }
+
+    @Test
     fun `full auto fallback and optimized routes require different processes`() {
         val providerFallback = healthyProcesses().copy(
             bridge = false,
@@ -160,6 +190,7 @@ class VpnServicePolicyTest {
         proxy = true,
         bridge = true,
         auxiliary = true,
-        telegram = true
+        telegram = true,
+        yctun = true
     )
 }

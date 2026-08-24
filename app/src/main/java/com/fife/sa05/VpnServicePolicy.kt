@@ -25,7 +25,8 @@ internal data class VpnProcessHealth(
     val proxy: Boolean,
     val bridge: Boolean,
     val auxiliary: Boolean,
-    val telegram: Boolean
+    val telegram: Boolean,
+    val yctun: Boolean = false
 )
 
 internal fun requiredProcessesRunning(
@@ -37,6 +38,7 @@ internal fun requiredProcessesRunning(
     return when (backend) {
         VpnBackend.PROXY_ONLY -> health.proxy
         VpnBackend.LOCAL_BYPASS -> health.proxy && health.bridge && health.telegram
+        VpnBackend.YCTUN -> health.proxy && health.yctun
         VpnBackend.FULL_AUTO -> {
             val base = health.proxy && health.telegram
             if (xrayRuntime == XrayRuntime.FULL_AUTO_YOUTUBE) {

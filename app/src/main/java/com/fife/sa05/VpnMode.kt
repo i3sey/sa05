@@ -6,10 +6,11 @@ internal fun effectiveVpnBackend(settings: XraySettings): VpnBackend =
 enum class VpnBackend(val title: String) {
     FULL_AUTO("[BETA] Фулл авто"),
     LOCAL_BYPASS("[BETA] Локальный обход"),
-    PROXY_ONLY("Только прокси");
+    PROXY_ONLY("Только прокси"),
+    YCTUN("CDN-туннель");
 
     val usesTelegram: Boolean
-        get() = this != PROXY_ONLY
+        get() = this != PROXY_ONLY && this != YCTUN
 
     val usesXrayProfile: Boolean
         get() = this != LOCAL_BYPASS
