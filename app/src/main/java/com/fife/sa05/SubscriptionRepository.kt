@@ -24,7 +24,9 @@ data class SubscriptionState(
     val etag: String = "",
     val userInfo: String = "",
     val updateIntervalHours: Int? = null,
-    val suggestedBypassApps: Set<String> = emptySet()
+    val suggestedBypassApps: Set<String> = emptySet(),
+    /** Параметры yctun из заголовка `x-sa05-yctun` (JSON), если провайдер не кладёт блок в профиль. */
+    val yctunJson: String = ""
 ) {
     val activeProfile: SubscriptionProfile?
         get() = profiles.firstOrNull { it.id == activeProfileId } ?: profiles.firstOrNull()
@@ -77,6 +79,23 @@ class SubscriptionRepository(private val context: Context) {
                 .map { it.trim() }
                 .filter { it.matches(Regex("[A-Za-z0-9_.]+")) }
                 .toSet()
+        }
+
+        internal fun decodeYctunHeader(value: String?): String {
+            if (value.isNullOrBlank()) return ""
+            val encoded = value.trim().substringAfter("base64:", missingDelimiterValue = "")
+            return if (encoded.isBlank()) {
+                value.trim()
+            } else {
+                try {
+                    String(
+                        Base64.decode(encoded, Base64.DEFAULT),
+                        Charsets.UTF_8
+                    )
+                } catch (_: Exception) {
+                    ""
+                }
+            }
         }
 
         private fun stableId(raw: String): String {
@@ -163,6 +182,9 @@ class SubscriptionRepository(private val context: Context) {
                 suggestedBypassApps = parseBypassHeader(
                     connection.getHeaderField("per-app-proxy-mode"),
                     connection.getHeaderField("per-app-proxy-list")
+                ),
+                yctunJson = decodeYctunHeader(
+                    connection.getHeaderField("x-sa05-yctun")
                 )
             )
             XrayPreferences.saveSubscription(context, next)

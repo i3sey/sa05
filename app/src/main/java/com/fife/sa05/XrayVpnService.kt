@@ -295,16 +295,11 @@ class XrayVpnService : VpnService() {
 
     private suspend fun startXrayBackend(
         fullAuto: Boolean = false,
-        yctun: Boolean = false
+        yctunParams: YctunParams? = null
     ): Int {
         val profileJson = runningProfile?.json ?: runningSettings.config
-        val validated = if (yctun) {
-            YctunParams.parse(profileJson)?.let {
-                XrayConfig.buildYctunConfig(profileJson, YCTUN_SOCKS_PORT)
-            } ?: error(
-                "Профиль не содержит блок ${YctunParams.BLOCK_KEY}: " +
-                    "режим CDN-туннель недоступен"
-            )
+        val validated = if (yctunParams != null) {
+            XrayConfig.buildYctunConfig(profileJson, YCTUN_SOCKS_PORT)
         } else {
             val rawConfig = XrayConfig.applyBeelinePadding(profileJson)
             if (fullAuto) {
@@ -314,7 +309,7 @@ class XrayVpnService : VpnService() {
             }
         }
         var runtimeJson = XrayConfig.quietRuntime(validated.runtimeJson)
-        if (!fullAuto && !yctun && runningBackend == VpnBackend.PROXY_ONLY) {
+        if (!fullAuto && yctunParams == null && runningBackend == VpnBackend.PROXY_ONLY) {
             runtimeJson = XrayConfig.blockUdp443(runtimeJson)
         }
         copyGeoAssets()
@@ -350,10 +345,10 @@ class XrayVpnService : VpnService() {
      */
     private suspend fun startYctunBackend(): BackendStart {
         val profileJson = runningProfile?.json ?: runningSettings.config
-        val params = YctunParams.parse(profileJson)
+        val params = YctunParams.resolve(profileJson, runningSettings.subscription)
             ?: error(
-                "Профиль не содержит блок ${YctunParams.BLOCK_KEY}: " +
-                    "режим CDN-туннель недоступен"
+                "Нет параметров туннеля: ни блока ${YctunParams.BLOCK_KEY} в профиле, " +
+                    "ни заголовка x-sa05-yctun в подписке — режим CDN-туннель недоступен"
             )
         val binary = File(applicationInfo.nativeLibraryDir, "librelayc.so")
         check(binary.exists()) { "librelayc.so не найден" }
@@ -370,7 +365,7 @@ class XrayVpnService : VpnService() {
             .start()
         pipeLogs("yctun", relaycProcess!!)
         waitForPort(relaycProcess!!, YCTUN_SOCKS_PORT, 15_000)
-        val socksPort = startXrayBackend(yctun = true)
+        val socksPort = startXrayBackend(yctunParams = params)
         runningLabel = "${selectedProfileLabel()} · CDN-туннель"
         return BackendStart(socksPort)
     }

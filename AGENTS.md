@@ -191,9 +191,13 @@ app/build/outputs/apk/debug/app-debug.apk
   wire protocol live in `third_party/yctun/` (see its PIN.md and README.md).
 - The tunnel credentials (`base_url`, `psk`, `server_pub`) are NOT embedded
   in the APK. They arrive per-subscription in an optional top-level
-  `sa05_yctun` block inside a profile's JSON; Xray ignores the key, SA05
-  strips it via `XrayConfig.buildYctunConfig` before writing the runtime
-  config and stores the params only transiently in `filesDir/yctun.json`.
+  `sa05_yctun` block inside a profile's JSON, or as a subscription response
+  header `x-sa05-yctun` (plain or `base64:` JSON) for providers that cannot
+  carry unknown keys (Remnawave strips them from Config Profiles on save via
+  `getSortedConfig()`). SA05 strips the block via
+  `XrayConfig.buildYctunConfig` before writing the runtime config and stores
+  the params only transiently in `filesDir/yctun.json`; `YctunParams.resolve`
+  prefers the profile block and falls back to the header.
 - relayc accepts SOCKS CONNECT only (no UDP). The yctun runtime config
   therefore routes client DNS into Xray's built-in DNS module with a DoH
   upstream on an IP literal (`https://8.8.8.8/dns-query`) to avoid

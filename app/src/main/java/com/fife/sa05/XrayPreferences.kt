@@ -398,7 +398,8 @@ object XrayPreferences {
                     .takeIf { it >= 0 },
                 suggestedBypassApps = (0 until bypassJson.length())
                     .mapNotNull { bypassJson.optString(it).takeIf(String::isNotBlank) }
-                    .toSet()
+                    .toSet(),
+                yctunJson = root.optString("yctunJson")
             )
         } catch (_: Exception) {
             SubscriptionState()
@@ -431,6 +432,7 @@ object XrayPreferences {
             .put("userInfo", state.userInfo)
             .put("updateIntervalHours", state.updateIntervalHours ?: -1)
             .put("suggestedBypassApps", bypass)
+            .put("yctunJson", state.yctunJson)
             .toString()
     }
 

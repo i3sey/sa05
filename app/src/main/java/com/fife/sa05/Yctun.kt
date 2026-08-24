@@ -13,8 +13,11 @@ import org.json.JSONObject
  *   tun2socks -> Xray (socks inbound) -> yctun outbound -> relayc :10812
  *   -> HTTPS GET dom.sa05.eu.cc (Yandex Cloud CDN) -> relayd на VPS -> интернет
  *
- * Блок опционален: обычные профили работают как раньше, а режим
- * [VpnBackend.YCTUN] без него не запускается.
+ * Блок опционален: обычные профили работают как раньше. Если провайдер
+ * не может пронести блок в теле (Remnawave вырезает неизвестные ключи
+ * шаблона при сохранении), параметры можно отдать заголовком подписки
+ * `x-sa05-yctun` — см. [SubscriptionRepository.decodeYctunHeader].
+ * Режим [VpnBackend.YCTUN] не запускается без параметров из любого источника.
  */
 data class YctunParams(
     val baseUrl: String,
@@ -50,6 +53,32 @@ data class YctunParams(
                 throw IllegalArgumentException("JSON профиля не разобран: ${e.message}")
             }
             val block = root.optJSONObject(BLOCK_KEY) ?: return null
+            return parseBlock(block)
+        }
+
+        /**
+         * Параметры из заголовка подписки `x-sa05-yctun` (JSON), см.
+         * [SubscriptionRepository.decodeYctunHeader]. Используется провайдерами,
+         * которые не могут положить блок в тело профиля (Remnawave вырезает
+         * неизвестные ключи шаблона при сохранении).
+         */
+        fun parseSubscription(subscription: SubscriptionState): YctunParams? {
+            if (subscription.yctunJson.isBlank()) return null
+            val block = try {
+                JSONObject(subscription.yctunJson)
+            } catch (e: Exception) {
+                throw IllegalArgumentException(
+                    "$BLOCK_KEY в заголовке x-sa05-yctun не разобран: ${e.message}"
+                )
+            }
+            return parseBlock(block)
+        }
+
+        /** Блок из профиля имеет приоритет, заголовок подписки — фолбэк. */
+        fun resolve(profileJson: String, subscription: SubscriptionState): YctunParams? =
+            parse(profileJson) ?: parseSubscription(subscription)
+
+        private fun parseBlock(block: JSONObject): YctunParams {
             val baseUrl = requireText(block, "base_url")
             val psk = requireText(block, "psk")
             val serverPub = requireText(block, "server_pub")

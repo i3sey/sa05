@@ -74,6 +74,79 @@ class YctunTest {
         assertNull(YctunParams.parse(XrayPreferences.defaultConfig))
     }
 
+    @Test
+    fun parseSubscriptionReadsHeaderJsonWhenProfileHasNoBlock() {
+        val subscription = SubscriptionState(
+            profiles = listOf(SubscriptionProfile("id", "p", profile)),
+            yctunJson = """
+                {
+                  "base_url": "https://dom.sa05.eu.cc",
+                  "psk": "58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75",
+                  "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101",
+                  "streams": 8
+                }
+            """.trimIndent()
+        )
+        val profileWithoutBlock = XrayPreferences.defaultConfig
+
+        assertNull(YctunParams.parseSubscription(SubscriptionState()))
+        val params = YctunParams.parseSubscription(subscription)
+        assertNotNull(params)
+        assertEquals("https://dom.sa05.eu.cc", params!!.baseUrl)
+        assertEquals(8, params.streams)
+        assertNull(YctunParams.parse(profileWithoutBlock))
+        // заголовок — фолбэк для профилей без блока
+        val resolved = YctunParams.resolve(profileWithoutBlock, subscription)
+        assertEquals("https://dom.sa05.eu.cc", resolved!!.baseUrl)
+    }
+
+    @Test
+    fun resolvePrefersProfileBlockOverSubscriptionHeader() {
+        val subscription = SubscriptionState(
+            yctunJson = """
+                {
+                  "base_url": "https://sub.example.com",
+                  "psk": "58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75",
+                  "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
+                }
+            """.trimIndent()
+        )
+
+        val resolved = YctunParams.resolve(profile, subscription)
+
+        assertEquals("https://dom.sa05.eu.cc", resolved!!.baseUrl)
+    }
+
+    @Test
+    fun resolveReturnsNullWithoutAnySource() {
+        assertNull(
+            YctunParams.resolve(XrayPreferences.defaultConfig, SubscriptionState())
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun parseSubscriptionRejectsMalformedJson() {
+        YctunParams.parseSubscription(
+            SubscriptionState(yctunJson = "{\"base_url\": broken")
+        )
+    }
+
+    @Test
+    fun subscriptionYctunJsonSurvivesEncodeDecodeRoundtrip() {
+        val state = SubscriptionState(
+            url = "https://sub.example.com/x",
+            yctunJson = """
+                {"base_url":"https://dom.sa05.eu.cc","psk":"58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}
+            """.trimIndent()
+        )
+
+        val decoded = XrayPreferences.decodeSubscription(
+            XrayPreferences.encodeSubscription(state)
+        )
+
+        assertEquals(state.yctunJson, decoded.yctunJson)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsInvalidPsk() {
         YctunParams.parse(
