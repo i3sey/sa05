@@ -14,7 +14,7 @@ class YctunTest {
           "remarks": "tunnel profile",
           "sa05_yctun": {
             "base_url": "https://dom.sa05.eu.cc",
-            "psk": "58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75",
+            "psk": "0000000000000000000000000000000000000000000000000000000000000000",
             "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
           },
           "inbounds": [{
@@ -34,7 +34,7 @@ class YctunTest {
 
         assertNotNull(params)
         assertEquals("https://dom.sa05.eu.cc", params!!.baseUrl)
-        assertEquals("58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75", params.psk)
+        assertEquals("0000000000000000000000000000000000000000000000000000000000000000", params.psk)
         assertEquals("b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101", params.serverPub)
         assertTrue(params.stream)
         assertEquals(4, params.streams)
@@ -50,7 +50,7 @@ class YctunTest {
                 "sa05_yctun",
                 JSONObject()
                     .put("base_url", "https://dom.sa05.eu.cc")
-                    .put("psk", "58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75")
+                    .put("psk", "0000000000000000000000000000000000000000000000000000000000000000")
                     .put("server_pub", "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101")
                     .put("stream", false)
                     .put("streams", 8)
@@ -81,7 +81,7 @@ class YctunTest {
             yctunJson = """
                 {
                   "base_url": "https://dom.sa05.eu.cc",
-                  "psk": "58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75",
+                  "psk": "0000000000000000000000000000000000000000000000000000000000000000",
                   "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101",
                   "streams": 8
                 }
@@ -106,7 +106,7 @@ class YctunTest {
             yctunJson = """
                 {
                   "base_url": "https://sub.example.com",
-                  "psk": "58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75",
+                  "psk": "0000000000000000000000000000000000000000000000000000000000000000",
                   "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
                 }
             """.trimIndent()
@@ -136,7 +136,7 @@ class YctunTest {
         val state = SubscriptionState(
             url = "https://sub.example.com/x",
             yctunJson = """
-                {"base_url":"https://dom.sa05.eu.cc","psk":"58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}
+                {"base_url":"https://dom.sa05.eu.cc","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}
             """.trimIndent()
         )
 
@@ -157,14 +157,14 @@ class YctunTest {
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsInvalidServerPub() {
         YctunParams.parse(
-            """{"sa05_yctun":{"base_url":"https://dom.sa05.eu.cc","psk":"58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75","server_pub":"short"}}"""
+            """{"sa05_yctun":{"base_url":"https://dom.sa05.eu.cc","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"short"}}"""
         )
     }
 
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsNonHttpsBaseUrl() {
         YctunParams.parse(
-            """{"sa05_yctun":{"base_url":"http://dom.sa05.eu.cc","psk":"58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
+            """{"sa05_yctun":{"base_url":"http://dom.sa05.eu.cc","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
         )
     }
 
@@ -175,7 +175,7 @@ class YctunTest {
 
         assertEquals("https://dom.sa05.eu.cc", root.getString("base_url"))
         assertEquals("127.0.0.1:10812", root.getString("listen"))
-        assertEquals("58af62c6471a4b5981a21839df4d142dbe636bc9aa3ec07d210806065a5b5f75", root.getString("psk"))
+        assertEquals("0000000000000000000000000000000000000000000000000000000000000000", root.getString("psk"))
         assertEquals("b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101", root.getString("server_pub"))
         assertTrue(root.getBoolean("stream"))
         assertEquals(4, root.getInt("streams"))
