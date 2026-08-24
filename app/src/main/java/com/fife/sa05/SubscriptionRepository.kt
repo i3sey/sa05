@@ -135,7 +135,29 @@ class SubscriptionRepository(private val context: Context) {
                 previous.url == normalizedUrl &&
                 previous.profiles.isNotEmpty()
             ) {
-                val refreshed = previous.copy(updatedAt = System.currentTimeMillis())
+                // 304 приходит со свежими заголовками: обновляем производные
+                // поля (включая x-sa05-yctun), не перекачивая тело.
+                val refreshed = previous.copy(
+                    updatedAt = System.currentTimeMillis(),
+                    title = decodeBase64Header(connection.getHeaderField("profile-title"))
+                        .ifBlank { previous.title },
+                    userInfo =
+                        connection.getHeaderField("subscription-userinfo").orEmpty()
+                            .ifBlank { previous.userInfo },
+                    updateIntervalHours = connection
+                        .getHeaderField("profile-update-interval")
+                        ?.trim()
+                        ?.toIntOrNull()
+                        ?: previous.updateIntervalHours,
+                    suggestedBypassApps =
+                        parseBypassHeader(
+                            connection.getHeaderField("per-app-proxy-mode"),
+                            connection.getHeaderField("per-app-proxy-list")
+                        ).ifEmpty { previous.suggestedBypassApps },
+                    yctunJson = decodeYctunHeader(
+                        connection.getHeaderField("x-sa05-yctun")
+                    ).ifBlank { previous.yctunJson }
+                )
                 XrayPreferences.saveSubscription(context, refreshed)
                 return SubscriptionUpdateResult.NotModified(refreshed)
             }
