@@ -131,7 +131,12 @@ object XrayPreferences {
     )
 
     internal fun decodeSettings(preferences: Preferences): XraySettings {
-        val subscription = decodeSubscription(preferences[subscriptionKey])
+        var subscription = decodeSubscription(preferences[subscriptionKey]).withCdnProfile()
+        val storedBackend = preferences[vpnBackendKey]
+        // Раньше CDN был режимом Advanced: переносим выбор на псевдо-сервер.
+        if (storedBackend == "YCTUN" && subscription.profiles.any { CdnProfile.isCdn(it) }) {
+            subscription = subscription.copy(activeProfileId = CdnProfile.ID)
+        }
         return XraySettings(
             config = subscription.activeProfile?.json
                 ?: preferences[configKey]
@@ -140,7 +145,7 @@ object XrayPreferences {
             subscription = subscription,
             dynamicColor = preferences[dynamicColorKey] ?: true,
             advancedModeEnabled = preferences[advancedModeKey] ?: false,
-            vpnBackend = VpnBackend.fromStoredName(preferences[vpnBackendKey]),
+            vpnBackend = VpnBackend.fromStoredName(storedBackend),
             zapretPreset = ZapretPreset.fromName(preferences[zapretPresetKey]),
             zapretCustomArguments = preferences[zapretCustomArgumentsKey].orEmpty(),
             telegramCfEnabled = preferences[telegramCfEnabledKey] ?: true,

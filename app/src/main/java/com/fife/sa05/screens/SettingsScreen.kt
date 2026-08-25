@@ -273,7 +273,7 @@ internal fun ColumnScope.AdvancedSettingsScreen(
             title = { Text("Режим VPN") },
             text = {
                 Column {
-                    VpnBackend.entries.forEach { backend ->
+                    VpnBackend.selectable.forEach { backend ->
                         TextButton(
                             onClick = {
                                 onSelectBackend(backend)
@@ -443,8 +443,18 @@ internal fun HostPingList(
     results: Map<String, String>,
     activePing: String?,
     onPing: (XrayHost) -> Unit,
+    isCdnProfile: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    if (isCdnProfile) {
+        Column(modifier.padding(top = 8.dp)) {
+            Text(
+                "Пинг для CDN-туннеля недоступен: трафик идёт через Yandex Cloud CDN, " +
+                    "а не через outbound провайдера."
+            )
+        }
+        return
+    }
     val parsed = remember(config) { runCatching { XrayConfig.extractHosts(config) } }
     Column(modifier.padding(top = 8.dp)) {
         Text("Проверка выполняется через протокол и настройки выбранного outbound.")

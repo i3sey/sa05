@@ -1,12 +1,23 @@
 package com.fife.sa05
 
-internal fun effectiveVpnBackend(settings: XraySettings): VpnBackend =
-    if (settings.advancedModeEnabled) settings.vpnBackend else VpnBackend.PROXY_ONLY
+internal fun effectiveVpnBackend(settings: XraySettings): VpnBackend {
+    if (CdnProfile.isCdn(settings.subscription.activeProfile)) {
+        return VpnBackend.YCTUN
+    }
+    if (!settings.advancedModeEnabled) return VpnBackend.PROXY_ONLY
+    // YCTUN больше не выбирается в Advanced — только через псевдо-сервер.
+    return if (settings.vpnBackend == VpnBackend.YCTUN) {
+        VpnBackend.PROXY_ONLY
+    } else {
+        settings.vpnBackend
+    }
+}
 
 enum class VpnBackend(val title: String) {
     FULL_AUTO("[BETA] Фулл авто"),
     LOCAL_BYPASS("[BETA] Локальный обход"),
     PROXY_ONLY("Только прокси"),
+    /** Runtime-only: выбирается через псевдо-сервер [CdnProfile], не из Advanced. */
     YCTUN("CDN-туннель");
 
     val usesTelegram: Boolean
@@ -16,8 +27,12 @@ enum class VpnBackend(val title: String) {
         get() = this != LOCAL_BYPASS
 
     companion object {
+        /** Режимы, доступные в Advanced UI (без CDN — он в списке серверов). */
+        val selectable: List<VpnBackend>
+            get() = entries.filter { it != YCTUN }
+
         fun fromStoredName(value: String?): VpnBackend = when (value) {
-            "XRAY", null -> PROXY_ONLY
+            "XRAY", null, "YCTUN" -> PROXY_ONLY
             "ZAPRET", "TELEGRAM" -> LOCAL_BYPASS
             else -> entries.firstOrNull { it.name == value } ?: PROXY_ONLY
         }

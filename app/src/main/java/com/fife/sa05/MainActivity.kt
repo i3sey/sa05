@@ -973,6 +973,7 @@ private fun XrayScreen(
                             ?: preferences.config,
                         results = pingResults,
                         activePing = activePing,
+                        isCdnProfile = CdnProfile.isCdn(subscription.activeProfile),
                         onPing = { host ->
                             pingEngine.cancel()
                             pingJob?.cancel()

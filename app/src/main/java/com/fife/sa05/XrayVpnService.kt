@@ -355,6 +355,7 @@ class XrayVpnService : VpnService() {
         val configFile = File(filesDir, "yctun.json").apply {
             writeText(params.relaycConfig("127.0.0.1:$YCTUN_SOCKS_PORT"))
         }
+        lastNativeError.set("")
         relaycProcess = ProcessBuilder(
             binary.absolutePath,
             "-config",
@@ -366,7 +367,7 @@ class XrayVpnService : VpnService() {
         pipeLogs("yctun", relaycProcess!!)
         waitForPort(relaycProcess!!, YCTUN_SOCKS_PORT, 15_000)
         val socksPort = startXrayBackend(yctunParams = params)
-        runningLabel = "${selectedProfileLabel()} · CDN-туннель"
+        runningLabel = selectedProfileLabel().ifBlank { CdnProfile.REMARKS }
         return BackendStart(socksPort)
     }
 
@@ -1122,9 +1123,10 @@ class XrayVpnService : VpnService() {
                 process.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         val lower = line.lowercase()
-                        if ("error" in lower || "failed" in lower ||
+                        val capture = tag == "yctun" ||
+                            "error" in lower || "failed" in lower ||
                             "invalid" in lower || "fatal" in lower
-                        ) {
+                        if (capture) {
                             lastNativeError.set(line)
                             Log.w(tag, line)
                         }
@@ -1225,7 +1227,7 @@ class XrayVpnService : VpnService() {
         VpnBackend.LOCAL_BYPASS ->
             "[BETA] ${runningSettings.zapretPreset.title} · Telegram"
         VpnBackend.FULL_AUTO -> "[BETA] ${selectedProfileLabel()} · локальный обход"
-        VpnBackend.YCTUN -> "${selectedProfileLabel()} · CDN-туннель"
+        VpnBackend.YCTUN -> selectedProfileLabel().ifBlank { CdnProfile.REMARKS }
     }
 
     private fun selectedProfileLabel(): String =

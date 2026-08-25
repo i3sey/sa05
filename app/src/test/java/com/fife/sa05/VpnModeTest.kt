@@ -38,8 +38,31 @@ class VpnModeTest {
         assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("ZAPRET"))
         assertEquals(VpnBackend.LOCAL_BYPASS, VpnBackend.fromStoredName("TELEGRAM"))
         assertEquals(VpnBackend.FULL_AUTO, VpnBackend.fromStoredName("FULL_AUTO"))
-        assertEquals(VpnBackend.YCTUN, VpnBackend.fromStoredName("YCTUN"))
+        assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName("YCTUN"))
         assertEquals(VpnBackend.PROXY_ONLY, VpnBackend.fromStoredName("unknown"))
+    }
+
+    @Test
+    fun cdnPseudoServerForcesYctunRegardlessOfAdvancedMode() {
+        val cdn = CdnProfile.build(
+            YctunParams(
+                baseUrl = "https://dom.sa05.eu.cc",
+                psk = "0000000000000000000000000000000000000000000000000000000000000000",
+                serverPub = "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
+            )
+        )
+        val settings = XraySettings(
+            config = cdn.json,
+            advancedModeEnabled = false,
+            vpnBackend = VpnBackend.FULL_AUTO,
+            subscription = SubscriptionState(
+                profiles = listOf(cdn),
+                activeProfileId = CdnProfile.ID
+            )
+        )
+
+        assertEquals(VpnBackend.YCTUN, effectiveVpnBackend(settings))
+        assertTrue(VpnBackend.YCTUN !in VpnBackend.selectable)
     }
 
     @Test

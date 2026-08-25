@@ -1,23 +1,17 @@
 package com.fife.sa05
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * Параметры режима «CDN-туннель» (yctun).
  *
- * Профиль подписки может нести опциональный верхнеуровневый блок
- * `sa05_yctun` с ключами туннеля. Xray такой ключ игнорирует; приложение
- * вырезает его перед записью runtime-конфига и запускает relayc (нативный
- * `librelayc.so`) как локальный SOCKS-прокси:
+ * Credentials приходят блоком `sa05_yctun` в профиле или заголовком
+ * `x-sa05-yctun`. Клиент добавляет псевдо-сервер [CdnProfile] в список
+ * подписки; выбор этого сервера запускает relayc + rewrite Xray:
  *
  *   tun2socks -> Xray (socks inbound) -> yctun outbound -> relayc :10812
- *   -> HTTPS GET dom.sa05.eu.cc (Yandex Cloud CDN) -> relayd на VPS -> интернет
- *
- * Блок опционален: обычные профили работают как раньше. Если провайдер
- * не может пронести блок в теле (Remnawave вырезает неизвестные ключи
- * шаблона при сохранении), параметры можно отдать заголовком подписки
- * `x-sa05-yctun` — см. [SubscriptionRepository.decodeYctunHeader].
- * Режим [VpnBackend.YCTUN] не запускается без параметров из любого источника.
+ *   -> HTTPS GET CDN -> relayd на VPS -> интернет
  */
 data class YctunParams(
     val baseUrl: String,
@@ -30,17 +24,19 @@ data class YctunParams(
     val pollMs: Int = 400
 ) {
     /** Конфиг для relayc (JSON-файл, `librelayc.so -config ...`). */
-    fun relaycConfig(listen: String): String = JSONObject()
+    fun relaycConfig(listen: String): String = toBlock()
+        .put("listen", listen)
+        .toString(2)
+
+    fun toBlock(): JSONObject = JSONObject()
         .put("base_url", baseUrl)
         .put("psk", psk)
         .put("server_pub", serverPub)
-        .put("listen", listen)
         .put("stream", stream)
         .put("streams", streams)
         .put("workers", workers)
         .put("chunk", chunk)
         .put("poll_ms", pollMs)
-        .toString(2)
 
     companion object {
         const val BLOCK_KEY = "sa05_yctun"
@@ -140,4 +136,79 @@ data class YctunParams(
             return value
         }
     }
+}
+
+/**
+ * Клиентский псевдо-сервер «CDN-туннель»: не приходит с провайдера,
+ * а вставляется в [SubscriptionState.profiles] при наличии credentials.
+ */
+object CdnProfile {
+    const val ID = "__sa05_cdn"
+    const val REMARKS = "CDN-туннель"
+    const val KIND_KEY = "sa05_kind"
+    const val KIND_VALUE = "yctun"
+    private const val SOCKS_PORT = 10808
+
+    fun isCdn(profile: SubscriptionProfile?): Boolean {
+        profile ?: return false
+        if (profile.id == ID) return true
+        return try {
+            JSONObject(profile.json).optString(KIND_KEY) == KIND_VALUE
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun build(params: YctunParams): SubscriptionProfile {
+        val json = JSONObject()
+            .put("remarks", REMARKS)
+            .put(KIND_KEY, KIND_VALUE)
+            .put(YctunParams.BLOCK_KEY, params.toBlock())
+            .put(
+                "inbounds",
+                JSONArray().put(
+                    JSONObject()
+                        .put("tag", "socks")
+                        .put("listen", "127.0.0.1")
+                        .put("port", SOCKS_PORT)
+                        .put("protocol", "socks")
+                        .put(
+                            "settings",
+                            JSONObject()
+                                .put("udp", true)
+                                .put("auth", "noauth")
+                        )
+                )
+            )
+            .put(
+                "outbounds",
+                JSONArray().put(
+                    JSONObject()
+                        .put("tag", "direct")
+                        .put("protocol", "freedom")
+                )
+            )
+            .toString(2)
+        XrayConfig.validate(json)
+        return SubscriptionProfile(id = ID, remarks = REMARKS, json = json)
+    }
+}
+
+/** Добавляет или убирает псевдо-сервер CDN в зависимости от credentials. */
+fun SubscriptionState.withCdnProfile(): SubscriptionState {
+    val without = profiles.filterNot { CdnProfile.isCdn(it) }
+    val params = runCatching { YctunParams.parseSubscription(this) }.getOrNull()
+        ?: without.firstNotNullOfOrNull {
+            runCatching { YctunParams.parse(it.json) }.getOrNull()
+        }
+    val nextProfiles = if (params != null) {
+        without + CdnProfile.build(params)
+    } else {
+        without
+    }
+    val activeId = when {
+        nextProfiles.any { it.id == activeProfileId } -> activeProfileId
+        else -> nextProfiles.firstOrNull()?.id.orEmpty()
+    }
+    return copy(profiles = nextProfiles, activeProfileId = activeId)
 }

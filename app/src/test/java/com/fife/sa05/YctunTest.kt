@@ -226,4 +226,64 @@ class YctunTest {
         val inbound = root.getJSONArray("inbounds").getJSONObject(0)
         assertTrue(inbound.getJSONObject("settings").getBoolean("udp"))
     }
+
+    @Test
+    fun withCdnProfileInjectsStableServerFromHeader() {
+        val provider = SubscriptionProfile("p1", "DE", XrayPreferences.defaultConfig)
+        val state = SubscriptionState(
+            profiles = listOf(provider),
+            activeProfileId = "p1",
+            yctunJson = """
+                {
+                  "base_url": "https://dom.sa05.eu.cc",
+                  "psk": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
+                }
+            """.trimIndent()
+        )
+
+        val injected = state.withCdnProfile()
+        assertEquals(2, injected.profiles.size)
+        assertTrue(CdnProfile.isCdn(injected.profiles.last()))
+        assertEquals(CdnProfile.ID, injected.profiles.last().id)
+        assertEquals(CdnProfile.REMARKS, injected.profiles.last().remarks)
+        assertEquals("p1", injected.activeProfileId)
+
+        val again = injected.withCdnProfile()
+        assertEquals(2, again.profiles.size)
+        assertEquals(CdnProfile.ID, again.profiles.last().id)
+    }
+
+    @Test
+    fun withCdnProfileInjectsFromProviderBlockWithoutHeader() {
+        val provider = SubscriptionProfile("p1", "DE", profile)
+        val injected = SubscriptionState(
+            profiles = listOf(provider),
+            activeProfileId = "p1"
+        ).withCdnProfile()
+
+        assertEquals(2, injected.profiles.size)
+        assertTrue(CdnProfile.isCdn(injected.profiles.last()))
+        assertNotNull(YctunParams.parse(injected.profiles.last().json))
+    }
+
+    @Test
+    fun withCdnProfileRemovesPseudoServerWithoutCredentials() {
+        val provider = SubscriptionProfile("p1", "DE", XrayPreferences.defaultConfig)
+        val cdn = CdnProfile.build(
+            YctunParams(
+                baseUrl = "https://dom.sa05.eu.cc",
+                psk = "0000000000000000000000000000000000000000000000000000000000000000",
+                serverPub = "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
+            )
+        )
+        val stripped = SubscriptionState(
+            profiles = listOf(provider, cdn),
+            activeProfileId = CdnProfile.ID
+        ).withCdnProfile()
+
+        assertEquals(1, stripped.profiles.size)
+        assertEquals("p1", stripped.activeProfileId)
+        assertFalse(stripped.profiles.any { CdnProfile.isCdn(it) })
+    }
 }

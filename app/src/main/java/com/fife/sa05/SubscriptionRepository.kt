@@ -157,7 +157,7 @@ class SubscriptionRepository(private val context: Context) {
                     yctunJson = decodeYctunHeader(
                         connection.getHeaderField("x-sa05-yctun")
                     ).ifBlank { previous.yctunJson }
-                )
+                ).withCdnProfile()
                 XrayPreferences.saveSubscription(context, refreshed)
                 return SubscriptionUpdateResult.NotModified(refreshed)
             }
@@ -208,7 +208,15 @@ class SubscriptionRepository(private val context: Context) {
                 yctunJson = decodeYctunHeader(
                     connection.getHeaderField("x-sa05-yctun")
                 )
-            )
+            ).withCdnProfile().let { state ->
+                if (CdnProfile.isCdn(previousActive) &&
+                    state.profiles.any { CdnProfile.isCdn(it) }
+                ) {
+                    state.copy(activeProfileId = CdnProfile.ID)
+                } else {
+                    state
+                }
+            }
             XrayPreferences.saveSubscription(context, next)
             return SubscriptionUpdateResult.Updated(next)
         } finally {
