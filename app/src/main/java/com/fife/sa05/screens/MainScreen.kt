@@ -33,8 +33,10 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.fife.sa05.AppUpdateState
 import com.fife.sa05.BsProfile
+import com.fife.sa05.BsTraffic
 import com.fife.sa05.ConnectionCheckState
 import com.fife.sa05.SubscriptionProfile
 import com.fife.sa05.SubscriptionState
@@ -107,6 +110,7 @@ internal fun ColumnScope.MainScreen(
     telegramRuntime: TelegramProxyRuntimeSnapshot,
     updateState: AppUpdateState,
     trafficUsage: TrafficUsage?,
+    bsTraffic: BsTraffic.Snapshot,
     onSelectProfile: (String) -> Unit,
     onToggleVpn: () -> Unit,
     onStartTelegram: () -> Unit,
@@ -117,9 +121,13 @@ internal fun ColumnScope.MainScreen(
     onOpenSubscriptionSettings: () -> Unit,
     onExclusions: () -> Unit,
     onOpenUpdate: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    onApplyInternetCode: (String) -> Unit
 ) {
-    val presentation = remember(vpnRuntime) { vpnStatusPresentation(vpnRuntime) }
+    val quotaExceeded = BsProfile.isBs(subscription.activeProfile) && bsTraffic.isExceeded
+    val presentation = remember(vpnRuntime, quotaExceeded) {
+        vpnStatusPresentation(vpnRuntime, bsTrafficExceeded = quotaExceeded)
+    }
     var profileSheetVisible by remember { mutableStateOf(false) }
     val profileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -184,6 +192,7 @@ internal fun ColumnScope.MainScreen(
                 primaryAction = presentation.primaryAction,
                 title = presentation.title,
                 description = connectionCheck.pingText() ?: presentation.description,
+                connectEnabled = !quotaExceeded,
                 onToggleVpn = onToggleVpn,
                 onOpenSubscriptionSettings = onOpenSubscriptionSettings,
                 onOpenNetworkSettings = onOpenNetworkSettings
@@ -219,7 +228,11 @@ internal fun ColumnScope.MainScreen(
         }
         if (BsProfile.isBs(subscription.activeProfile)) {
             item {
-                TrafficCard(trafficUsage = trafficUsage)
+                TrafficCard(
+                    bsTraffic = bsTraffic,
+                    sessionUsage = trafficUsage,
+                    onApplyInternetCode = onApplyInternetCode
+                )
             }
         }
         item {
@@ -312,6 +325,7 @@ private fun VpnStatusCard(
     primaryAction: VpnPrimaryAction,
     title: String,
     description: String,
+    connectEnabled: Boolean = true,
     onToggleVpn: () -> Unit,
     onOpenSubscriptionSettings: () -> Unit,
     onOpenNetworkSettings: () -> Unit
@@ -358,6 +372,8 @@ private fun VpnStatusCard(
                     Text(description, style = MaterialTheme.typography.bodyMedium, color = content)
                 }
             }
+            val canConnect = connectEnabled &&
+                primaryAction != VpnPrimaryAction.OPEN_SUBSCRIPTION
             val interaction = remember { MutableInteractionSource() }
             Button(
                 onClick = {
@@ -367,6 +383,9 @@ private fun VpnStatusCard(
                         onToggleVpn()
                     }
                 },
+                enabled = primaryAction == VpnPrimaryAction.STOP ||
+                    primaryAction == VpnPrimaryAction.OPEN_SUBSCRIPTION ||
+                    canConnect,
                 interactionSource = interaction,
                 modifier = Modifier.fillMaxWidth().height(56.dp).pressScale(interaction)
             ) {
@@ -439,9 +458,20 @@ private fun TelegramCard(
 }
 
 @Composable
-private fun TrafficCard(trafficUsage: TrafficUsage?) {
-    val connected = trafficUsage != null
-    val usage = trafficUsage ?: TrafficUsage.EMPTY
+private fun TrafficCard(
+    bsTraffic: BsTraffic.Snapshot,
+    sessionUsage: TrafficUsage?,
+    onApplyInternetCode: (String) -> Unit
+) {
+    val connected = sessionUsage != null
+    val session = sessionUsage ?: TrafficUsage.EMPTY
+    var codeDraft by remember { mutableStateOf("") }
+    val periodColor = when {
+        bsTraffic.isExceeded -> MaterialTheme.colorScheme.error
+        bsTraffic.isCritical -> MaterialTheme.colorScheme.error
+        bsTraffic.isWarning -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.primary
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -454,16 +484,99 @@ private fun TrafficCard(trafficUsage: TrafficUsage?) {
                 Icon(
                     Icons.Default.DataUsage,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = periodColor
                 )
                 Column(Modifier.weight(1f)) {
                     Text("Трафик", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "БС-туннель",
+                        "БС-туннель · лимит на устройстве",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Использовано",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${formatTrafficBytes(bsTraffic.periodUsedBytes)} из " +
+                            formatTrafficBytes(bsTraffic.limitBytes),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = periodColor
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { bsTraffic.usageRatio },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = periodColor,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+                Text(
+                    "${bsTraffic.usagePercent}%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            when {
+                bsTraffic.isExceeded -> {
+                    Text(
+                        "Лимит исчерпан. Введите код на интернет или дождитесь сброса периода.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                bsTraffic.isCritical -> {
+                    Text(
+                        "Осталось менее 10% лимита",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                bsTraffic.isWarning -> {
+                    Text(
+                        "Осталось менее 20% лимита",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+            }
+            if (bsTraffic.bonusBytes > 0) {
+                Text(
+                    "Бонус по кодам: +${formatTrafficBytes(bsTraffic.bonusBytes)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            OutlinedTextField(
+                value = codeDraft,
+                onValueChange = { codeDraft = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Код на интернет") },
+                placeholder = { Text("XXXX-XXXX-XXXX-XXXX") },
+                singleLine = true
+            )
+            Button(
+                onClick = {
+                    if (codeDraft.isNotBlank()) {
+                        onApplyInternetCode(codeDraft)
+                        codeDraft = ""
+                    }
+                },
+                enabled = codeDraft.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Применить код")
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -471,7 +584,7 @@ private fun TrafficCard(trafficUsage: TrafficUsage?) {
             ) {
                 TrafficStat(
                     label = "Получено",
-                    value = formatTrafficBytes(usage.rxBytes),
+                    value = formatTrafficBytes(session.rxBytes),
                     icon = {
                         Icon(
                             Icons.Default.ArrowDownward,
@@ -483,7 +596,7 @@ private fun TrafficCard(trafficUsage: TrafficUsage?) {
                 )
                 TrafficStat(
                     label = "Отправлено",
-                    value = formatTrafficBytes(usage.txBytes),
+                    value = formatTrafficBytes(session.txBytes),
                     icon = {
                         Icon(
                             Icons.Default.ArrowUpward,
@@ -510,7 +623,7 @@ private fun TrafficCard(trafficUsage: TrafficUsage?) {
                     Spacer(Modifier.weight(1f))
                     val motion = motionEnabled()
                     AnimatedContent(
-                        targetState = formatTrafficBytes(usage.totalBytes),
+                        targetState = formatTrafficBytes(session.totalBytes),
                         transitionSpec = { fadeTransform(motion) },
                         label = "trafficTotal"
                     ) { total ->
@@ -519,7 +632,7 @@ private fun TrafficCard(trafficUsage: TrafficUsage?) {
                 }
             } else {
                 Text(
-                    "Подключите VPN, чтобы видеть трафик",
+                    "Подключите VPN, чтобы видеть трафик сессии",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

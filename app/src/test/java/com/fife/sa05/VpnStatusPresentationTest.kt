@@ -81,4 +81,22 @@ class VpnStatusPresentationTest {
         assertEquals(VpnPrimaryAction.OPEN_SUBSCRIPTION, presentation.primaryAction)
         assertEquals(emptyList<VpnSecondaryAction>(), presentation.secondaryActions)
     }
+
+    @Test
+    fun `quota failure keeps connect blocked`() {
+        val presentation = vpnStatusPresentation(
+            VpnRuntimeSnapshot(
+                status = VpnRunStatus.ERROR,
+                backend = VpnBackend.YCTUN,
+                profileId = BsProfile.ID,
+                profileName = BsProfile.REMARKS,
+                message = "Лимит трафика БС",
+                failureKind = VpnFailureKind.QUOTA
+            )
+        )
+
+        assertEquals("Лимит трафика БС исчерпан", presentation.title)
+        assertEquals(VpnPrimaryAction.CONNECT, presentation.primaryAction)
+        assertEquals(emptyList<VpnSecondaryAction>(), presentation.secondaryActions)
+    }
 }

@@ -167,6 +167,21 @@ class XrayVpnService : VpnService() {
         runningProfile = runningSettings.subscription.activeProfile
             .takeIf { runningBackend.usesXrayProfile }
         runningLabel = selectedLabel()
+        if (runningBackend == VpnBackend.YCTUN &&
+            BsTraffic.isExceeded(this)
+        ) {
+            val policy = BsTraffic.policy(this)
+            val used = BsTraffic.reconcileUsedBytes(this, policy)
+            _socksPort.value = null
+            publishRuntime(
+                status = VpnRunStatus.ERROR,
+                message = "Лимит трафика БС: ${formatTrafficBytes(used)} из " +
+                    formatTrafficBytes(policy.limitBytes),
+                failureKind = VpnFailureKind.QUOTA
+            )
+            stopSelf()
+            return
+        }
         val network = currentNetwork()
         if (network == null) {
             publishRuntime(
@@ -926,6 +941,8 @@ class XrayVpnService : VpnService() {
         val unsupported = TrafficStats.UNSUPPORTED.toLong()
         val baselineRx = TrafficStats.getUidRxBytes(uid)
         val baselineTx = TrafficStats.getUidTxBytes(uid)
+        var lastRx = baselineRx
+        var lastTx = baselineTx
         _trafficUsage.value = TrafficUsage.EMPTY
         trafficMeterJob = scope.launch {
             while (true) {
@@ -938,10 +955,16 @@ class XrayVpnService : VpnService() {
                 ) {
                     TrafficUsage.UNAVAILABLE
                 } else {
-                    TrafficUsage(
-                        rxBytes = (rx - baselineRx).coerceAtLeast(0L),
-                        txBytes = (tx - baselineTx).coerceAtLeast(0L)
-                    )
+                    val sessionRx = (rx - baselineRx).coerceAtLeast(0L)
+                    val sessionTx = (tx - baselineTx).coerceAtLeast(0L)
+                    val deltaRx = (rx - lastRx).coerceAtLeast(0L)
+                    val deltaTx = (tx - lastTx).coerceAtLeast(0L)
+                    if (deltaRx > 0 || deltaTx > 0) {
+                        BsTraffic.addBytes(this@XrayVpnService, deltaRx + deltaTx)
+                    }
+                    lastRx = rx
+                    lastTx = tx
+                    TrafficUsage(rxBytes = sessionRx, txBytes = sessionTx)
                 }
             }
         }

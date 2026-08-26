@@ -40,6 +40,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -131,12 +132,26 @@ class MainActivity : ComponentActivity() {
 
     private fun requestVpnAndStart() {
         lifecycleScope.launch {
-            val subscription = XrayPreferences.snapshot(this@MainActivity).subscription
+            val settings = XrayPreferences.snapshot(this@MainActivity)
+            val subscription = settings.subscription
             if (!SubscriptionAuth.isAuthorized(subscription)) {
                 Toast.makeText(
                     this@MainActivity,
                     "Сначала добавьте действующую подписку",
                     Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+            if (effectiveVpnBackend(settings) == VpnBackend.YCTUN &&
+                BsTraffic.isExceeded(this@MainActivity)
+            ) {
+                val policy = BsTraffic.policy(this@MainActivity)
+                val used = BsTraffic.reconcileUsedBytes(this@MainActivity, policy)
+                Toast.makeText(
+                    this@MainActivity,
+                    "Лимит трафика БС: ${formatTrafficBytes(used)} из " +
+                        formatTrafficBytes(policy.limitBytes),
+                    Toast.LENGTH_LONG
                 ).show()
                 return@launch
             }
@@ -327,6 +342,10 @@ private fun XrayScreen(
     val telegramRuntime by TelegramProxyRuntimeState.observe(context).collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
     val trafficUsage by XrayVpnService.trafficUsage.collectAsState()
+    var bsTrafficLedgerVersion by remember { mutableIntStateOf(0) }
+    val bsTraffic = remember(bsTrafficLedgerVersion, trafficUsage) {
+        BsTraffic.snapshot(context.applicationContext, trafficUsage)
+    }
     val importUrl by subscriptionImport.collectAsState()
     val backendState = vpnRuntime.status
     val snackbarHostState = remember { SnackbarHostState() }
@@ -624,9 +643,14 @@ private fun XrayScreen(
     }
     LaunchedEffect(Unit) {
         checkAppUpdate(silent = true)
+    }
+    LaunchedEffect(subscription.url, subscription.updatedAt, importUrl) {
         if (subscription.url.isNotBlank() && importUrl == null) {
             updateSubscription(subscription.url, silent = true)
         }
+    }
+    LaunchedEffect(Unit) {
+        BsTraffic.reconcile(context)
     }
     LaunchedEffect(importUrl) {
         importUrl?.let {
@@ -802,6 +826,7 @@ private fun XrayScreen(
                     telegramRuntime = telegramRuntime,
                     updateState = updateState,
                     trafficUsage = trafficUsage,
+                    bsTraffic = bsTraffic,
                     onSelectProfile = { id ->
                         when (
                             profileSwitchAction(
@@ -849,7 +874,21 @@ private fun XrayScreen(
                     onOpenSubscriptionSettings = { screen = AppScreen.SETTINGS },
                     onExclusions = { screen = AppScreen.EXCLUSIONS },
                     onOpenUpdate = { screen = AppScreen.SETTINGS },
-                    onSettings = { screen = AppScreen.SETTINGS }
+                    onSettings = { screen = AppScreen.SETTINGS },
+                    onApplyInternetCode = { code ->
+                        scope.launch {
+                            when (BsTraffic.applyInternetCode(context, code)) {
+                                BsTraffic.ApplyCodeResult.APPLIED -> {
+                                    bsTrafficLedgerVersion++
+                                    message = "Код применён — лимит увеличен"
+                                }
+                                BsTraffic.ApplyCodeResult.ALREADY_USED ->
+                                    message = "Этот код уже был использован на устройстве"
+                                BsTraffic.ApplyCodeResult.INVALID ->
+                                    message = "Неверный код"
+                            }
+                        }
+                    }
                 )
                 AppScreen.DIAGNOSTICS -> ContentScreen(
                     title = "Проверка",

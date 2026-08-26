@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import java.io.IOException
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -75,6 +77,10 @@ object XrayPreferences {
     private const val KEY_TELEGRAM_SECRET = "telegram_secret"
     private const val KEY_TELEGRAM_APPLIED = "telegram_applied"
     private const val KEY_TELEGRAM_EXPLAINER_SEEN = "telegram_explainer_seen"
+    private const val KEY_BS_TRAFFIC_USED = "bs_traffic_used"
+    private const val KEY_BS_TRAFFIC_PERIOD_EXPIRE = "bs_traffic_period_expire"
+    private const val KEY_BS_TRAFFIC_BONUS = "bs_traffic_bonus"
+    private const val KEY_BS_TRAFFIC_CODES = "bs_traffic_codes"
     private const val MAX_NETWORK_CACHE_ENTRIES = 16
 
     internal val defaultConfig = """
@@ -122,6 +128,15 @@ object XrayPreferences {
     private val youtubeCacheNetworkKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_NETWORK)
     private val youtubeCachePresetKey = stringPreferencesKey(KEY_YOUTUBE_CACHE_PRESET)
     private val youtubeCacheVersionKey = intPreferencesKey(KEY_YOUTUBE_CACHE_VERSION)
+    private val bsTrafficUsedKey = longPreferencesKey(KEY_BS_TRAFFIC_USED)
+    private val bsTrafficPeriodExpireKey = longPreferencesKey(KEY_BS_TRAFFIC_PERIOD_EXPIRE)
+    private val bsTrafficBonusKey = longPreferencesKey(KEY_BS_TRAFFIC_BONUS)
+    private val bsTrafficCodesKey = stringSetPreferencesKey(KEY_BS_TRAFFIC_CODES)
+
+    data class BsTrafficLedger(
+        val usedBytes: Long = 0L,
+        val periodExpireAt: Long = 0L
+    )
 
     internal fun migrations(
         context: Context,
@@ -413,6 +428,46 @@ object XrayPreferences {
 
     suspend fun saveSubscription(context: Context, state: SubscriptionState) {
         dataStore(context).edit { it[subscriptionKey] = encodeSubscription(state) }
+    }
+
+    fun bsTrafficBonusBytes(context: Context): Long = runBlocking {
+        dataStore(context).data.first()[bsTrafficBonusKey] ?: 0L
+    }
+
+    fun bsTrafficAppliedCodeHashes(context: Context): Set<String> = runBlocking {
+        dataStore(context).data.first()[bsTrafficCodesKey].orEmpty()
+    }
+
+    suspend fun applyBsInternetCode(
+        context: Context,
+        codeHash: String,
+        bonusBytes: Long
+    ) {
+        dataStore(context).edit { preferences ->
+            val applied = preferences[bsTrafficCodesKey].orEmpty()
+            preferences[bsTrafficCodesKey] = applied + codeHash
+            preferences[bsTrafficBonusKey] =
+                (preferences[bsTrafficBonusKey] ?: 0L) + bonusBytes
+        }
+    }
+
+    fun bsTrafficLedger(context: Context): BsTrafficLedger = runBlocking {
+        val preferences = dataStore(context).data.first()
+        BsTrafficLedger(
+            usedBytes = preferences[bsTrafficUsedKey] ?: 0L,
+            periodExpireAt = preferences[bsTrafficPeriodExpireKey] ?: 0L
+        )
+    }
+
+    suspend fun setBsTrafficUsed(
+        context: Context,
+        usedBytes: Long,
+        periodExpireAt: Long
+    ) {
+        dataStore(context).edit {
+            it[bsTrafficUsedKey] = usedBytes.coerceAtLeast(0L)
+            it[bsTrafficPeriodExpireKey] = periodExpireAt.coerceAtLeast(0L)
+        }
     }
 
     internal fun encodeSubscription(state: SubscriptionState): String {

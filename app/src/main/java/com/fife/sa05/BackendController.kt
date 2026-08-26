@@ -13,12 +13,31 @@ internal fun startAuthorizedBackend(
 }
 
 object BackendController {
-    suspend fun startSelected(context: Context): Boolean =
-        startAuthorizedBackend(
-            SubscriptionAuth.isAuthorized(XrayPreferences.snapshot(context).subscription)
+    suspend fun startSelected(context: Context): Boolean {
+        val settings = XrayPreferences.snapshot(context)
+        if (!SubscriptionAuth.isAuthorized(settings.subscription)) return false
+        if (effectiveVpnBackend(settings) == VpnBackend.YCTUN &&
+            BsTraffic.isExceeded(context)
         ) {
-            XrayVpnService.start(context)
+            val policy = BsTraffic.policy(context)
+            val used = BsTraffic.reconcileUsedBytes(context, policy)
+            VpnRuntimeState.publish(
+                context,
+                VpnRuntimeSnapshot(
+                    status = VpnRunStatus.ERROR,
+                    backend = VpnBackend.YCTUN,
+                    profileId = settings.subscription.activeProfileId,
+                    profileName = settings.subscription.activeProfile?.remarks.orEmpty(),
+                    message = "Лимит трафика БС: ${formatTrafficBytes(used)} из " +
+                        formatTrafficBytes(policy.limitBytes),
+                    failureKind = VpnFailureKind.QUOTA
+                )
+            )
+            return false
         }
+        XrayVpnService.start(context)
+        return true
+    }
 
     /** Starts only the local TG WS Proxy; no subscription or VPN permission is involved. */
     suspend fun startTelegramOnly(context: Context): Boolean {

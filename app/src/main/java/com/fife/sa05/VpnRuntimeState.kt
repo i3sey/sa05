@@ -24,7 +24,8 @@ enum class VpnFailureKind {
     BACKEND,
     TUNNEL,
     HEALTH_CHECK,
-    SERVICE
+    SERVICE,
+    QUOTA
 }
 
 enum class VpnNetworkType(val title: String) {

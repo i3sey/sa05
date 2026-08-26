@@ -21,12 +21,23 @@ data class VpnStatusPresentation(
     val secondaryActions: List<VpnSecondaryAction>
 )
 
-fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
+fun vpnStatusPresentation(
+    snapshot: VpnRuntimeSnapshot,
+    bsTrafficExceeded: Boolean = false
+): VpnStatusPresentation {
     val profileDescription = snapshot.profileName.ifBlank { snapshot.backend.title }
     return when (snapshot.status) {
         VpnRunStatus.DISCONNECTED -> VpnStatusPresentation(
-            title = "VPN выключен",
-            description = "Выберите сервер и подключите VPN",
+            title = if (bsTrafficExceeded) {
+                "Лимит трафика БС исчерпан"
+            } else {
+                "VPN выключен"
+            },
+            description = if (bsTrafficExceeded) {
+                "Введите код на интернет или дождитесь сброса периода"
+            } else {
+                "Выберите сервер и подключите VPN"
+            },
             primaryAction = VpnPrimaryAction.CONNECT,
             secondaryActions = emptyList()
         )
@@ -58,23 +69,29 @@ fun vpnStatusPresentation(snapshot: VpnRuntimeSnapshot): VpnStatusPresentation {
             secondaryActions = listOf(VpnSecondaryAction.NETWORK_SETTINGS)
         )
         VpnRunStatus.ERROR -> VpnStatusPresentation(
-            title = if (snapshot.failureKind == VpnFailureKind.AUTHORIZATION) {
-                "Нужна действующая подписка"
-            } else {
-                "Не удалось подключить VPN"
+            title = when (snapshot.failureKind) {
+                VpnFailureKind.AUTHORIZATION -> "Нужна действующая подписка"
+                VpnFailureKind.QUOTA -> "Лимит трафика БС исчерпан"
+                else -> "Не удалось подключить VPN"
             },
-            description = snapshot.message.ifBlank { "Повторите попытку или откройте проверку" },
-            primaryAction = if (snapshot.failureKind == VpnFailureKind.AUTHORIZATION) {
-                VpnPrimaryAction.OPEN_SUBSCRIPTION
-            } else {
-                VpnPrimaryAction.RETRY
+            description = snapshot.message.ifBlank {
+                when (snapshot.failureKind) {
+                    VpnFailureKind.QUOTA ->
+                        "Подключение недоступно до сброса периода"
+                    else -> "Повторите попытку или откройте проверку"
+                }
+            },
+            primaryAction = when (snapshot.failureKind) {
+                VpnFailureKind.AUTHORIZATION -> VpnPrimaryAction.OPEN_SUBSCRIPTION
+                VpnFailureKind.QUOTA -> VpnPrimaryAction.CONNECT
+                else -> VpnPrimaryAction.RETRY
             },
             secondaryActions = when (snapshot.failureKind) {
                 VpnFailureKind.NETWORK -> listOf(
                     VpnSecondaryAction.NETWORK_SETTINGS,
                     VpnSecondaryAction.DIAGNOSTICS
                 )
-                VpnFailureKind.AUTHORIZATION -> emptyList()
+                VpnFailureKind.AUTHORIZATION, VpnFailureKind.QUOTA -> emptyList()
                 else -> listOf(
                     if (snapshot.backend.usesXrayProfile) {
                         VpnSecondaryAction.CHANGE_PROFILE
