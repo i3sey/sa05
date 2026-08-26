@@ -2,6 +2,7 @@ package com.fife.sa05
 
 import android.content.Context
 import android.util.Base64
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -106,16 +107,22 @@ class SubscriptionRepository(private val context: Context) {
 
     suspend fun load(): SubscriptionState = XrayPreferences.snapshot(context).subscription
 
-    suspend fun setActiveProfile(id: String): SubscriptionState {
-        val current = load()
-        require(current.profiles.any { it.id == id }) { "Профиль не найден" }
-        return current.copy(activeProfileId = id).also {
-            XrayPreferences.saveSubscription(context, it)
+    suspend fun setActiveProfile(id: String): SubscriptionState =
+        SubscriptionMutationLock.mutex.withLock {
+            val current = load()
+            require(current.profiles.any { it.id == id }) { "Профиль не найден" }
+            val next = current.copy(activeProfileId = id)
+            XrayPreferences.saveSubscription(context, next)
             VpnRuntimeState.requestTileRefresh(context)
+            next
         }
-    }
 
-    suspend fun update(inputUrl: String): SubscriptionUpdateResult {
+    suspend fun update(inputUrl: String): SubscriptionUpdateResult =
+        SubscriptionMutationLock.mutex.withLock {
+            updateLocked(inputUrl)
+        }
+
+    private suspend fun updateLocked(inputUrl: String): SubscriptionUpdateResult {
         val normalizedUrl = validateUrl(inputUrl)
         val previous = load()
         val connection = (URL(normalizedUrl).openConnection() as HttpURLConnection).apply {
@@ -138,7 +145,6 @@ class SubscriptionRepository(private val context: Context) {
                 // 304 приходит со свежими заголовками: обновляем производные
                 // поля (включая x-sa05-yctun), не перекачивая тело.
                 val refreshed = previous.copy(
-                    updatedAt = System.currentTimeMillis(),
                     title = decodeBase64Header(connection.getHeaderField("profile-title"))
                         .ifBlank { previous.title },
                     userInfo =
@@ -158,8 +164,12 @@ class SubscriptionRepository(private val context: Context) {
                         connection.getHeaderField("x-sa05-yctun")
                     ).ifBlank { previous.yctunJson }
                 ).withBsProfile()
-                XrayPreferences.saveSubscription(context, refreshed)
-                return SubscriptionUpdateResult.NotModified(refreshed)
+                if (!subscriptionMetadataChanged(previous, refreshed)) {
+                    return SubscriptionUpdateResult.NotModified(previous)
+                }
+                val saved = refreshed.copy(updatedAt = System.currentTimeMillis())
+                XrayPreferences.saveSubscription(context, saved)
+                return SubscriptionUpdateResult.NotModified(saved)
             }
             if (status !in 200..299) {
                 throw IllegalArgumentException("Сервер подписки вернул HTTP $status")
@@ -215,6 +225,18 @@ class SubscriptionRepository(private val context: Context) {
             connection.disconnect()
         }
     }
+
+    private fun subscriptionMetadataChanged(
+        previous: SubscriptionState,
+        refreshed: SubscriptionState
+    ): Boolean =
+        previous.title != refreshed.title ||
+            previous.userInfo != refreshed.userInfo ||
+            previous.updateIntervalHours != refreshed.updateIntervalHours ||
+            previous.suggestedBypassApps != refreshed.suggestedBypassApps ||
+            previous.yctunJson != refreshed.yctunJson ||
+            previous.activeProfileId != refreshed.activeProfileId ||
+            previous.profiles != refreshed.profiles
 
     private fun validateUrl(raw: String): String {
         val value = raw.trim()

@@ -14,8 +14,6 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal object SubscriptionRefreshPolicy {
@@ -30,13 +28,10 @@ internal object SubscriptionRefreshPolicy {
 }
 
 internal object SubscriptionRefreshRunner {
-    private val mutex = Mutex()
-
-    suspend fun refresh(context: Context, url: String): SubscriptionUpdateResult = mutex.withLock {
+    suspend fun refresh(context: Context, url: String): SubscriptionUpdateResult =
         withContext(Dispatchers.IO) {
             SubscriptionRepository(context.applicationContext).update(url)
         }
-    }
 }
 
 internal object SubscriptionRefreshScheduler {

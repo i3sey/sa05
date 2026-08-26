@@ -646,7 +646,7 @@ private fun XrayScreen(
         XrayPreferences.migrateLegacyYctunBackendIfNeeded(context)
         BsTraffic.reconcile(context)
     }
-    LaunchedEffect(subscription.url, subscription.updatedAt, importUrl) {
+    LaunchedEffect(subscription.url, importUrl) {
         if (subscription.url.isNotBlank() && importUrl == null) {
             updateSubscription(subscription.url, silent = true)
         }
