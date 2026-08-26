@@ -175,9 +175,9 @@ internal fun ProfileExplainer(
     profile: SubscriptionProfile,
     modifier: Modifier = Modifier
 ) {
-    if (CdnProfile.isCdn(profile)) {
+    if (BsProfile.isBs(profile)) {
         Text(
-            "Трафик через Yandex Cloud CDN (HTTPS GET) до origin VPS. " +
+            "Трафик через Yandex Cloud Functions (HTTPS poll) до origin VPS. " +
                 "Провайдерский outbound не используется.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

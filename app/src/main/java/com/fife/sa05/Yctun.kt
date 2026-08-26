@@ -4,24 +4,25 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Параметры режима «CDN-туннель» (yctun).
+ * Параметры режима «БС-туннель» (yctun через Yandex Cloud Functions).
  *
  * Credentials приходят блоком `sa05_yctun` в профиле или заголовком
- * `x-sa05-yctun`. Клиент добавляет псевдо-сервер [CdnProfile] в список
+ * `x-sa05-yctun`. Клиент добавляет псевдо-сервер [BsProfile] в список
  * подписки; выбор этого сервера запускает relayc + rewrite Xray:
  *
  *   tun2socks -> Xray (socks inbound) -> yctun outbound -> relayc :10812
- *   -> HTTPS GET CDN -> relayd на VPS -> интернет
+ *   -> HTTPS functions.yandexcloud.net -> relayd на VPS -> интернет
  */
 data class YctunParams(
     val baseUrl: String,
     val psk: String,
     val serverPub: String,
-    val stream: Boolean = true,
-    val streams: Int = 4,
-    val workers: Int = 6,
-    val chunk: Int = 12288,
-    val pollMs: Int = 400
+    val stream: Boolean = false,
+    val streams: Int = 0,
+    val workers: Int = 1,
+    val chunk: Int = 8192,
+    val pollMs: Int = 5000,
+    val postUplink: Boolean = true
 ) {
     /** Конфиг для relayc (JSON-файл, `librelayc.so -config ...`). */
     fun relaycConfig(listen: String): String = toBlock()
@@ -37,6 +38,7 @@ data class YctunParams(
         .put("workers", workers)
         .put("chunk", chunk)
         .put("poll_ms", pollMs)
+        .put("post_uplink", postUplink)
 
     companion object {
         const val BLOCK_KEY = "sa05_yctun"
@@ -85,11 +87,12 @@ data class YctunParams(
                 baseUrl = baseUrl,
                 psk = psk,
                 serverPub = serverPub,
-                stream = block.optBoolean("stream", true),
-                streams = positiveInt(block, "streams", 4),
-                workers = positiveInt(block, "workers", 6),
-                chunk = positiveInt(block, "chunk", 12288),
-                pollMs = positiveInt(block, "poll_ms", 400)
+                stream = block.optBoolean("stream", false),
+                streams = nonNegativeInt(block, "streams", 0),
+                workers = positiveInt(block, "workers", 1),
+                chunk = positiveInt(block, "chunk", 8192),
+                pollMs = positiveInt(block, "poll_ms", 5000),
+                postUplink = block.optBoolean("post_uplink", true)
             )
         }
 
@@ -107,7 +110,7 @@ data class YctunParams(
             }
             if (url.scheme != "https" || url.host.isNullOrBlank()) {
                 throw IllegalArgumentException(
-                    "$BLOCK_KEY: base_url должен быть https-адресом CDN-ресурса"
+                    "$BLOCK_KEY: base_url должен быть https-адресом входа туннеля"
                 )
             }
         }
@@ -135,23 +138,34 @@ data class YctunParams(
             }
             return value
         }
+
+        private fun nonNegativeInt(block: JSONObject, key: String, fallback: Int): Int {
+            if (!block.has(key)) return fallback
+            val value = block.getInt(key)
+            if (value < 0) {
+                throw IllegalArgumentException("$BLOCK_KEY: «$key» не может быть отрицательным")
+            }
+            return value
+        }
     }
 }
 
 /**
- * Клиентский псевдо-сервер «CDN-туннель»: не приходит с провайдера,
+ * Клиентский псевдо-сервер «БС-туннель»: не приходит с провайдера,
  * а вставляется в [SubscriptionState.profiles] при наличии credentials.
  */
-object CdnProfile {
-    const val ID = "__sa05_cdn"
-    const val REMARKS = "CDN-туннель"
+object BsProfile {
+    const val ID = "__sa05_bs"
+    const val REMARKS = "БС-туннель"
     const val KIND_KEY = "sa05_kind"
     const val KIND_VALUE = "yctun"
+    /** Старый id псевдо-сервера до перехода на Cloud Functions. */
+    const val LEGACY_ID = "__sa05_cdn"
     private const val SOCKS_PORT = 10808
 
-    fun isCdn(profile: SubscriptionProfile?): Boolean {
+    fun isBs(profile: SubscriptionProfile?): Boolean {
         profile ?: return false
-        if (profile.id == ID) return true
+        if (profile.id == ID || profile.id == LEGACY_ID) return true
         return try {
             JSONObject(profile.json).optString(KIND_KEY) == KIND_VALUE
         } catch (_: Exception) {
@@ -194,19 +208,21 @@ object CdnProfile {
     }
 }
 
-/** Добавляет или убирает псевдо-сервер CDN в зависимости от credentials. */
-fun SubscriptionState.withCdnProfile(): SubscriptionState {
-    val without = profiles.filterNot { CdnProfile.isCdn(it) }
+/** Добавляет или убирает псевдо-сервер БС в зависимости от credentials. */
+fun SubscriptionState.withBsProfile(): SubscriptionState {
+    val without = profiles.filterNot { BsProfile.isBs(it) }
     val params = runCatching { YctunParams.parseSubscription(this) }.getOrNull()
         ?: without.firstNotNullOfOrNull {
             runCatching { YctunParams.parse(it.json) }.getOrNull()
         }
     val nextProfiles = if (params != null) {
-        without + CdnProfile.build(params)
+        without + BsProfile.build(params)
     } else {
         without
     }
     val activeId = when {
+        activeProfileId == BsProfile.LEGACY_ID && nextProfiles.any { it.id == BsProfile.ID } ->
+            BsProfile.ID
         nextProfiles.any { it.id == activeProfileId } -> activeProfileId
         else -> nextProfiles.firstOrNull()?.id.orEmpty()
     }

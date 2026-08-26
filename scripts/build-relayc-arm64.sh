@@ -2,8 +2,8 @@
 #
 # Build the yctun tunnel client (relayc) as the Android arm64 `librelayc.so`.
 #
-# The client implements a GET-only tunnel through the Yandex Cloud CDN:
-#   app (SOCKS) -> relayc -> HTTPS GET dom.sa05.eu.cc -> relayd (VPS origin).
+# The client implements a poll tunnel through Yandex Cloud Functions (whitelist bypass):
+#   app (SOCKS) -> relayc -> HTTPS functions.yandexcloud.net -> relayd (VPS origin).
 # See third_party/yctun/README.md and AGENTS.md (yctun section).
 #
 # The produced binary is a PIE executable renamed to librelayc.so and shipped

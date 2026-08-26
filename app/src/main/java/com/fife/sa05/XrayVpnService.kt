@@ -12,6 +12,7 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -54,10 +55,13 @@ class XrayVpnService : VpnService() {
         private const val NETWORK_DEBOUNCE_MS = 1_500L
         private const val RECOVERY_RETRY_MS = 3_000L
         private const val PROCESS_MONITOR_MS = 30_000L
+        private const val TRAFFIC_METER_INTERVAL_MS = 1_000L
         private val _socksPort = MutableStateFlow<Int?>(null)
         val socksPort = _socksPort.asStateFlow()
         private val _zapretAutoProgress = MutableStateFlow(ZapretAutoProgress())
         val zapretAutoProgress = _zapretAutoProgress.asStateFlow()
+        private val _trafficUsage = MutableStateFlow<TrafficUsage?>(null)
+        val trafficUsage = _trafficUsage.asStateFlow()
         @Volatile private var verificationMessage = ""
 
         fun start(context: Context) {
@@ -80,6 +84,7 @@ class XrayVpnService : VpnService() {
     private var fullAutoOptimizationJob: Job? = null
     private var networkRecoveryJob: Job? = null
     private var processMonitorJob: Job? = null
+    private var trafficMeterJob: Job? = null
     private var tun: ParcelFileDescriptor? = null
     private var proxyProcess: Process? = null
     private var relaycProcess: Process? = null
@@ -196,6 +201,7 @@ class XrayVpnService : VpnService() {
         startMutex.withLock {
             try {
                 stopProcesses()
+                stopTrafficMeter()
                 val backend = when (runningBackend) {
                     VpnBackend.PROXY_ONLY -> BackendStart(startXrayBackend())
                     VpnBackend.LOCAL_BYPASS -> {
@@ -224,6 +230,7 @@ class XrayVpnService : VpnService() {
                 )
                 startForegroundNow(STATE_CONNECTED)
                 startProcessMonitor()
+                startTrafficMeter()
                 if (runningBackend == VpnBackend.FULL_AUTO) {
                     launchFullAutoOptimization(generation, backend.socksPort)
                 } else if (runningBackend == VpnBackend.PROXY_ONLY ||
@@ -244,6 +251,7 @@ class XrayVpnService : VpnService() {
                     message = e.message ?: "Ошибка запуска"
                 )
                 stopProcesses()
+                stopTrafficMeter()
                 if (currentNetwork() == null) {
                     publishRuntime(
                         status = VpnRunStatus.WAITING_FOR_NETWORK,
@@ -340,15 +348,15 @@ class XrayVpnService : VpnService() {
     }
 
     /**
-     * CDN-туннель: relayc (SOCKS5 на 127.0.0.1:10812, GET-запросы через
-     * Yandex Cloud CDN к relayd на VPS) + Xray поверх него.
+     * БС-туннель: relayc (SOCKS5 на 127.0.0.1:10812, poll через
+     * Yandex Cloud Functions к relayd на VPS) + Xray поверх него.
      */
     private suspend fun startYctunBackend(): BackendStart {
         val profileJson = runningProfile?.json ?: runningSettings.config
         val params = YctunParams.resolve(profileJson, runningSettings.subscription)
             ?: error(
                 "Нет параметров туннеля: ни блока ${YctunParams.BLOCK_KEY} в профиле, " +
-                    "ни заголовка x-sa05-yctun в подписке — режим CDN-туннель недоступен"
+                    "ни заголовка x-sa05-yctun в подписке — режим БС-туннель недоступен"
             )
         val binary = File(applicationInfo.nativeLibraryDir, "librelayc.so")
         check(binary.exists()) { "librelayc.so не найден" }
@@ -367,7 +375,7 @@ class XrayVpnService : VpnService() {
         pipeLogs("yctun", relaycProcess!!)
         waitForPort(relaycProcess!!, YCTUN_SOCKS_PORT, 15_000)
         val socksPort = startXrayBackend(yctunParams = params)
-        runningLabel = selectedProfileLabel().ifBlank { CdnProfile.REMARKS }
+        runningLabel = selectedProfileLabel().ifBlank { BsProfile.REMARKS }
         return BackendStart(socksPort)
     }
 
@@ -911,6 +919,40 @@ class XrayVpnService : VpnService() {
         }
     }
 
+    private fun startTrafficMeter() {
+        stopTrafficMeter()
+        if (runningBackend != VpnBackend.YCTUN) return
+        val uid = android.os.Process.myUid()
+        val unsupported = TrafficStats.UNSUPPORTED.toLong()
+        val baselineRx = TrafficStats.getUidRxBytes(uid)
+        val baselineTx = TrafficStats.getUidTxBytes(uid)
+        _trafficUsage.value = TrafficUsage.EMPTY
+        trafficMeterJob = scope.launch {
+            while (true) {
+                delay(TRAFFIC_METER_INTERVAL_MS)
+                val rx = TrafficStats.getUidRxBytes(uid)
+                val tx = TrafficStats.getUidTxBytes(uid)
+                _trafficUsage.value = if (
+                    rx == unsupported || tx == unsupported ||
+                    baselineRx == unsupported || baselineTx == unsupported
+                ) {
+                    TrafficUsage.UNAVAILABLE
+                } else {
+                    TrafficUsage(
+                        rxBytes = (rx - baselineRx).coerceAtLeast(0L),
+                        txBytes = (tx - baselineTx).coerceAtLeast(0L)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun stopTrafficMeter() {
+        trafficMeterJob?.cancel()
+        trafficMeterJob = null
+        _trafficUsage.value = null
+    }
+
     private fun requiredProcessesRunning(): Boolean {
         return requiredProcessesRunning(
             backend = runningBackend,
@@ -1179,6 +1221,7 @@ class XrayVpnService : VpnService() {
         fullAutoOptimizationJob?.cancel()
         fullAutoOptimizationJob = null
         stopProcesses()
+        stopTrafficMeter()
         runningProfile = null
         runningLabel = ""
         _socksPort.value = null
@@ -1227,7 +1270,7 @@ class XrayVpnService : VpnService() {
         VpnBackend.LOCAL_BYPASS ->
             "[BETA] ${runningSettings.zapretPreset.title} · Telegram"
         VpnBackend.FULL_AUTO -> "[BETA] ${selectedProfileLabel()} · локальный обход"
-        VpnBackend.YCTUN -> selectedProfileLabel().ifBlank { CdnProfile.REMARKS }
+        VpnBackend.YCTUN -> selectedProfileLabel().ifBlank { BsProfile.REMARKS }
     }
 
     private fun selectedProfileLabel(): String =
@@ -1297,6 +1340,7 @@ class XrayVpnService : VpnService() {
         networkRecoveryJob?.cancel()
         processMonitorJob?.cancel()
         stopProcesses()
+        stopTrafficMeter()
         runningProfile = null
         runningLabel = ""
         _socksPort.value = null

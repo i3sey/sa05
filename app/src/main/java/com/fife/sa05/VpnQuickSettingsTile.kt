@@ -135,7 +135,7 @@ class VpnQuickSettingsTile : TileService() {
                 .ifBlank { "Xray" } + " + локальный обход"
         VpnBackend.YCTUN ->
             settings.subscription.activeProfile?.remarks.orEmpty()
-                .ifBlank { "Xray" } + " + CDN"
+                .ifBlank { "Xray" } + " + БС"
     }
 
     @SuppressLint("StartActivityAndCollapseDeprecated")

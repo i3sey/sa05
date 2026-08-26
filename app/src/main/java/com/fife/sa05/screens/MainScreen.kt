@@ -1,6 +1,7 @@
 package com.fife.sa05.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -15,8 +16,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -42,18 +47,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.fife.sa05.AppUpdateState
+import com.fife.sa05.BsProfile
 import com.fife.sa05.ConnectionCheckState
 import com.fife.sa05.SubscriptionProfile
 import com.fife.sa05.SubscriptionState
 import com.fife.sa05.TelegramProxyRunStatus
 import com.fife.sa05.TelegramProxyRuntimeSnapshot
+import com.fife.sa05.TrafficUsage
 import com.fife.sa05.VpnPrimaryAction
 import com.fife.sa05.VpnRunStatus
 import com.fife.sa05.VpnRuntimeSnapshot
 import com.fife.sa05.VpnSecondaryAction
+import com.fife.sa05.formatTrafficBytes
 import com.fife.sa05.vpnStatusPresentation
 import com.fife.sa05.components.DashboardRow
 import com.fife.sa05.parseServerRemark
@@ -97,6 +106,7 @@ internal fun ColumnScope.MainScreen(
     connectionCheck: ConnectionCheckState,
     telegramRuntime: TelegramProxyRuntimeSnapshot,
     updateState: AppUpdateState,
+    trafficUsage: TrafficUsage?,
     onSelectProfile: (String) -> Unit,
     onToggleVpn: () -> Unit,
     onStartTelegram: () -> Unit,
@@ -205,6 +215,11 @@ internal fun ColumnScope.MainScreen(
                         onClick = onExclusions
                     )
                 }
+            }
+        }
+        if (BsProfile.isBs(subscription.activeProfile)) {
+            item {
+                TrafficCard(trafficUsage = trafficUsage)
             }
         }
         item {
@@ -419,6 +434,132 @@ private fun TelegramCard(
                     })
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TrafficCard(trafficUsage: TrafficUsage?) {
+    val connected = trafficUsage != null
+    val usage = trafficUsage ?: TrafficUsage.EMPTY
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    Icons.Default.DataUsage,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("Трафик", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "БС-туннель",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TrafficStat(
+                    label = "Получено",
+                    value = formatTrafficBytes(usage.rxBytes),
+                    icon = {
+                        Icon(
+                            Icons.Default.ArrowDownward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                TrafficStat(
+                    label = "Отправлено",
+                    value = formatTrafficBytes(usage.txBytes),
+                    icon = {
+                        Icon(
+                            Icons.Default.ArrowUpward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            if (connected) {
+                androidx.compose.material3.HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 2.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Всего за сессию",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.weight(1f))
+                    val motion = motionEnabled()
+                    AnimatedContent(
+                        targetState = formatTrafficBytes(usage.totalBytes),
+                        transitionSpec = { fadeTransform(motion) },
+                        label = "trafficTotal"
+                    ) { total ->
+                        Text(total, style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            } else {
+                Text(
+                    "Подключите VPN, чтобы видеть трафик",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrafficStat(
+    label: String,
+    value: String,
+    icon: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            icon()
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        val motion = motionEnabled()
+        AnimatedContent(
+            targetState = value,
+            transitionSpec = { fadeTransform(motion) },
+            label = "trafficValue"
+        ) { v ->
+            Text(v, style = MaterialTheme.typography.headlineSmall)
         }
     }
 }

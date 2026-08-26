@@ -9,11 +9,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class YctunTest {
+    private val baseUrl = "https://functions.yandexcloud.net/d4e4etbt3unqg8k9ac4n"
+
     private val profile = """
         {
           "remarks": "tunnel profile",
           "sa05_yctun": {
-            "base_url": "https://dom.sa05.eu.cc",
+            "base_url": "$baseUrl",
             "psk": "0000000000000000000000000000000000000000000000000000000000000000",
             "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
           },
@@ -33,14 +35,15 @@ class YctunTest {
         val params = YctunParams.parse(profile)
 
         assertNotNull(params)
-        assertEquals("https://dom.sa05.eu.cc", params!!.baseUrl)
+        assertEquals(baseUrl, params!!.baseUrl)
         assertEquals("0000000000000000000000000000000000000000000000000000000000000000", params.psk)
         assertEquals("b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101", params.serverPub)
-        assertTrue(params.stream)
-        assertEquals(4, params.streams)
-        assertEquals(6, params.workers)
-        assertEquals(12288, params.chunk)
-        assertEquals(400, params.pollMs)
+        assertFalse(params.stream)
+        assertEquals(0, params.streams)
+        assertEquals(1, params.workers)
+        assertEquals(8192, params.chunk)
+        assertEquals(5000, params.pollMs)
+        assertTrue(params.postUplink)
     }
 
     @Test
@@ -49,24 +52,26 @@ class YctunTest {
             .put(
                 "sa05_yctun",
                 JSONObject()
-                    .put("base_url", "https://dom.sa05.eu.cc")
+                    .put("base_url", baseUrl)
                     .put("psk", "0000000000000000000000000000000000000000000000000000000000000000")
                     .put("server_pub", "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101")
-                    .put("stream", false)
+                    .put("stream", true)
                     .put("streams", 8)
                     .put("workers", 3)
                     .put("chunk", 9000)
                     .put("poll_ms", 250)
+                    .put("post_uplink", false)
             )
             .toString()
 
         val params = YctunParams.parse(withTuning)!!
 
-        assertFalse(params.stream)
+        assertTrue(params.stream)
         assertEquals(8, params.streams)
         assertEquals(3, params.workers)
         assertEquals(9000, params.chunk)
         assertEquals(250, params.pollMs)
+        assertFalse(params.postUplink)
     }
 
     @Test
@@ -80,7 +85,7 @@ class YctunTest {
             profiles = listOf(SubscriptionProfile("id", "p", profile)),
             yctunJson = """
                 {
-                  "base_url": "https://dom.sa05.eu.cc",
+                  "base_url": "$baseUrl",
                   "psk": "0000000000000000000000000000000000000000000000000000000000000000",
                   "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101",
                   "streams": 8
@@ -92,12 +97,11 @@ class YctunTest {
         assertNull(YctunParams.parseSubscription(SubscriptionState()))
         val params = YctunParams.parseSubscription(subscription)
         assertNotNull(params)
-        assertEquals("https://dom.sa05.eu.cc", params!!.baseUrl)
+        assertEquals(baseUrl, params!!.baseUrl)
         assertEquals(8, params.streams)
         assertNull(YctunParams.parse(profileWithoutBlock))
-        // заголовок — фолбэк для профилей без блока
         val resolved = YctunParams.resolve(profileWithoutBlock, subscription)
-        assertEquals("https://dom.sa05.eu.cc", resolved!!.baseUrl)
+        assertEquals(baseUrl, resolved!!.baseUrl)
     }
 
     @Test
@@ -114,7 +118,7 @@ class YctunTest {
 
         val resolved = YctunParams.resolve(profile, subscription)
 
-        assertEquals("https://dom.sa05.eu.cc", resolved!!.baseUrl)
+        assertEquals(baseUrl, resolved!!.baseUrl)
     }
 
     @Test
@@ -136,7 +140,7 @@ class YctunTest {
         val state = SubscriptionState(
             url = "https://sub.example.com/x",
             yctunJson = """
-                {"base_url":"https://dom.sa05.eu.cc","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}
+                {"base_url":"$baseUrl","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}
             """.trimIndent()
         )
 
@@ -150,21 +154,21 @@ class YctunTest {
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsInvalidPsk() {
         YctunParams.parse(
-            """{"sa05_yctun":{"base_url":"https://dom.sa05.eu.cc","psk":"zz","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
+            """{"sa05_yctun":{"base_url":"$baseUrl","psk":"zz","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
         )
     }
 
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsInvalidServerPub() {
         YctunParams.parse(
-            """{"sa05_yctun":{"base_url":"https://dom.sa05.eu.cc","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"short"}}"""
+            """{"sa05_yctun":{"base_url":"$baseUrl","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"short"}}"""
         )
     }
 
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsNonHttpsBaseUrl() {
         YctunParams.parse(
-            """{"sa05_yctun":{"base_url":"http://dom.sa05.eu.cc","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
+            """{"sa05_yctun":{"base_url":"http://functions.yandexcloud.net/id","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
         )
     }
 
@@ -173,15 +177,16 @@ class YctunTest {
         val config = YctunParams.parse(profile)!!.relaycConfig("127.0.0.1:10812")
         val root = JSONObject(config)
 
-        assertEquals("https://dom.sa05.eu.cc", root.getString("base_url"))
+        assertEquals(baseUrl, root.getString("base_url"))
         assertEquals("127.0.0.1:10812", root.getString("listen"))
         assertEquals("0000000000000000000000000000000000000000000000000000000000000000", root.getString("psk"))
         assertEquals("b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101", root.getString("server_pub"))
-        assertTrue(root.getBoolean("stream"))
-        assertEquals(4, root.getInt("streams"))
-        assertEquals(6, root.getInt("workers"))
-        assertEquals(12288, root.getInt("chunk"))
-        assertEquals(400, root.getInt("poll_ms"))
+        assertFalse(root.getBoolean("stream"))
+        assertEquals(0, root.getInt("streams"))
+        assertEquals(1, root.getInt("workers"))
+        assertEquals(8192, root.getInt("chunk"))
+        assertEquals(5000, root.getInt("poll_ms"))
+        assertTrue(root.getBoolean("post_uplink"))
     }
 
     @Test
@@ -203,11 +208,9 @@ class YctunTest {
         assertTrue("dns" in protocols)
         assertTrue("freedom" in protocols)
         assertTrue("blackhole" in protocols)
-        // провайдерские outbounds не тронуты
         assertTrue((0 until outbounds.length()).any {
             outbounds.getJSONObject(it).optString("tag") == "proxy"
         })
-        // DNS через DoH на IP-литерал (без рекурсии через туннель)
         val dnsServers = root.getJSONObject("dns").getJSONArray("servers")
         assertEquals("https://8.8.8.8/dns-query", dnsServers.getJSONObject(0).getString("address"))
         val rules = root.getJSONObject("routing").getJSONArray("rules")
@@ -215,7 +218,6 @@ class YctunTest {
         assertEquals("geoip:private", rules.getJSONObject(0).getJSONArray("ip").getString(0))
         assertEquals("53", rules.getJSONObject(1).getString("port"))
         assertEquals("udp", rules.getJSONObject(2).getString("network"))
-        // дефолтный outbound — туннель (первый в списке)
         assertTrue(outbounds.getJSONObject(0).getString("tag").startsWith("__sa05_yctun"))
     }
 
@@ -228,62 +230,82 @@ class YctunTest {
     }
 
     @Test
-    fun withCdnProfileInjectsStableServerFromHeader() {
+    fun withBsProfileInjectsStableServerFromHeader() {
         val provider = SubscriptionProfile("p1", "DE", XrayPreferences.defaultConfig)
         val state = SubscriptionState(
             profiles = listOf(provider),
             activeProfileId = "p1",
             yctunJson = """
                 {
-                  "base_url": "https://dom.sa05.eu.cc",
+                  "base_url": "$baseUrl",
                   "psk": "0000000000000000000000000000000000000000000000000000000000000000",
                   "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
                 }
             """.trimIndent()
         )
 
-        val injected = state.withCdnProfile()
+        val injected = state.withBsProfile()
         assertEquals(2, injected.profiles.size)
-        assertTrue(CdnProfile.isCdn(injected.profiles.last()))
-        assertEquals(CdnProfile.ID, injected.profiles.last().id)
-        assertEquals(CdnProfile.REMARKS, injected.profiles.last().remarks)
+        assertTrue(BsProfile.isBs(injected.profiles.last()))
+        assertEquals(BsProfile.ID, injected.profiles.last().id)
+        assertEquals(BsProfile.REMARKS, injected.profiles.last().remarks)
         assertEquals("p1", injected.activeProfileId)
 
-        val again = injected.withCdnProfile()
+        val again = injected.withBsProfile()
         assertEquals(2, again.profiles.size)
-        assertEquals(CdnProfile.ID, again.profiles.last().id)
+        assertEquals(BsProfile.ID, again.profiles.last().id)
     }
 
     @Test
-    fun withCdnProfileInjectsFromProviderBlockWithoutHeader() {
+    fun withBsProfileInjectsFromProviderBlockWithoutHeader() {
         val provider = SubscriptionProfile("p1", "DE", profile)
         val injected = SubscriptionState(
             profiles = listOf(provider),
             activeProfileId = "p1"
-        ).withCdnProfile()
+        ).withBsProfile()
 
         assertEquals(2, injected.profiles.size)
-        assertTrue(CdnProfile.isCdn(injected.profiles.last()))
+        assertTrue(BsProfile.isBs(injected.profiles.last()))
         assertNotNull(YctunParams.parse(injected.profiles.last().json))
     }
 
     @Test
-    fun withCdnProfileRemovesPseudoServerWithoutCredentials() {
+    fun withBsProfileRemovesPseudoServerWithoutCredentials() {
         val provider = SubscriptionProfile("p1", "DE", XrayPreferences.defaultConfig)
-        val cdn = CdnProfile.build(
+        val bs = BsProfile.build(
             YctunParams(
-                baseUrl = "https://dom.sa05.eu.cc",
+                baseUrl = baseUrl,
                 psk = "0000000000000000000000000000000000000000000000000000000000000000",
                 serverPub = "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
             )
         )
         val stripped = SubscriptionState(
-            profiles = listOf(provider, cdn),
-            activeProfileId = CdnProfile.ID
-        ).withCdnProfile()
+            profiles = listOf(provider, bs),
+            activeProfileId = BsProfile.ID
+        ).withBsProfile()
 
         assertEquals(1, stripped.profiles.size)
         assertEquals("p1", stripped.activeProfileId)
-        assertFalse(stripped.profiles.any { CdnProfile.isCdn(it) })
+        assertFalse(stripped.profiles.any { BsProfile.isBs(it) })
+    }
+
+    @Test
+    fun withBsProfileMigratesLegacyCdnId() {
+        val provider = SubscriptionProfile("p1", "DE", XrayPreferences.defaultConfig)
+        val state = SubscriptionState(
+            profiles = listOf(provider),
+            activeProfileId = BsProfile.LEGACY_ID,
+            yctunJson = """
+                {
+                  "base_url": "$baseUrl",
+                  "psk": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
+                }
+            """.trimIndent()
+        )
+
+        val migrated = state.withBsProfile()
+
+        assertEquals(BsProfile.ID, migrated.activeProfileId)
     }
 }

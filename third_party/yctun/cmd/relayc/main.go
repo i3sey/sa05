@@ -26,21 +26,21 @@ import (
 )
 
 type Config struct {
-	BaseURL   string `json:"base_url"`   // https://dom.sa05.eu.cc
-	PSK       string `json:"psk"`        // hex
-	ServerPub string `json:"server_pub"` // hex 32 байта
-	Listen    string `json:"listen"`     // 127.0.0.1:1080
-	Chunk     int    `json:"chunk,omitempty"`
-	Workers   int    `json:"workers,omitempty"`
-	PollMs    int    `json:"poll_ms,omitempty"`
-	Stream    *bool  `json:"stream,omitempty"`
-	Streams   int    `json:"streams,omitempty"`
+	BaseURL    string `json:"base_url"`   // https://dom.sa05.eu.cc
+	PSK        string `json:"psk"`        // hex
+	ServerPub  string `json:"server_pub"` // hex 32 байта
+	Listen     string `json:"listen"`     // 127.0.0.1:1080
+	Chunk      int    `json:"chunk,omitempty"`
+	Workers    int    `json:"workers,omitempty"`
+	PollMs     int    `json:"poll_ms,omitempty"`
+	Stream     *bool  `json:"stream,omitempty"`
+	Streams    int    `json:"streams,omitempty"`
+	PostUplink *bool  `json:"post_uplink,omitempty"`
 }
 
 func main() {
 	configPath := flag.String("config", "relayc.json", "путь к конфигу")
 	flag.Parse()
-	usePublicDNS()
 
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
@@ -71,9 +71,8 @@ func main() {
 	sid := randHex(16)
 
 	// hello: получаем статический pubkey сервера (base64 raw)
-	helloURL := *base
-	helloURL.Path = "/s/" + sid + "/hello/" + base64.RawURLEncoding.EncodeToString(ephPub[:])
-	gotPubB64, err := httpGet(helloURL.String())
+	helloPath := "/s/" + sid + "/hello/" + base64.RawURLEncoding.EncodeToString(ephPub[:])
+	gotPubB64, err := httpGet(base, helloPath)
 	if err != nil {
 		log.Fatalf("hello: %v", err)
 	}
@@ -105,12 +104,17 @@ func main() {
 	if cfg.Stream != nil {
 		stream = *cfg.Stream
 	}
+	postUplink := false
+	if cfg.PostUplink != nil {
+		postUplink = *cfg.PostUplink
+	}
 	t := chanhttp.NewClient(base, sid, sealer, opener, chanhttp.ClientCfg{
-		Chunk:   cfg.Chunk,
-		Workers: cfg.Workers,
-		PollMs:  cfg.PollMs,
-		Stream:  stream,
-		Streams: cfg.Streams,
+		Chunk:      cfg.Chunk,
+		Workers:    cfg.Workers,
+		PollMs:     cfg.PollMs,
+		Stream:     stream,
+		Streams:    cfg.Streams,
+		PostUplink: postUplink,
 	}, sess.HandleFrame)
 	t.OnReconnect = sess.Resend
 
@@ -173,30 +177,17 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// Android (GOOS=android, CGO off) читает resolv.conf → [::1]:53, а netd
-// приложениям туда не отвечает. Hello идёт до поднятия SOCKS, поэтому
-// резолвим через публичный DNS напрямую — UID клиента исключён из TUN.
-func usePublicDNS() {
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 3 * time.Second}
-			var last error
-			for _, dns := range []string{"8.8.8.8:53", "1.1.1.1:53"} {
-				c, err := d.DialContext(ctx, "udp", dns)
-				if err == nil {
-					return c, nil
-				}
-				last = err
-			}
-			return nil, last
-		},
+func httpGet(base *url.URL, p string) ([]byte, error) {
+	reqURL, hdrPath := chanhttp.TunnelRequestURL(base, p)
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
 	}
-}
-
-func httpGet(u string) ([]byte, error) {
+	if hdrPath != "" {
+		req.Header.Set("X-Yctun-Path", hdrPath)
+	}
 	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Get(u)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

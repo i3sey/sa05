@@ -1,7 +1,7 @@
 package com.fife.sa05
 
 internal fun effectiveVpnBackend(settings: XraySettings): VpnBackend {
-    if (CdnProfile.isCdn(settings.subscription.activeProfile)) {
+    if (BsProfile.isBs(settings.subscription.activeProfile)) {
         return VpnBackend.YCTUN
     }
     if (!settings.advancedModeEnabled) return VpnBackend.PROXY_ONLY
@@ -17,8 +17,8 @@ enum class VpnBackend(val title: String) {
     FULL_AUTO("[BETA] Фулл авто"),
     LOCAL_BYPASS("[BETA] Локальный обход"),
     PROXY_ONLY("Только прокси"),
-    /** Runtime-only: выбирается через псевдо-сервер [CdnProfile], не из Advanced. */
-    YCTUN("CDN-туннель");
+    /** Runtime-only: выбирается через псевдо-сервер [BsProfile], не из Advanced. */
+    YCTUN("БС-туннель");
 
     val usesTelegram: Boolean
         get() = this != PROXY_ONLY && this != YCTUN
@@ -27,7 +27,7 @@ enum class VpnBackend(val title: String) {
         get() = this != LOCAL_BYPASS
 
     companion object {
-        /** Режимы, доступные в Advanced UI (без CDN — он в списке серверов). */
+        /** Режимы, доступные в Advanced UI (без БС-туннеля — он в списке серверов). */
         val selectable: List<VpnBackend>
             get() = entries.filter { it != YCTUN }
 

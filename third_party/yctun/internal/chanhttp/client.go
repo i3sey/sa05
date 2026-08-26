@@ -27,12 +27,13 @@ import (
 )
 
 type ClientCfg struct {
-	Chunk   int           // байт на uplink-запрос (после b64 ~ +33%)
-	Workers int           // параллельных uplink-воркеров
-	PollMs  int           // интервал heartbeat при простое
-	Stream  bool          // использовать стрим-даунлинк
-	Streams int           // число параллельных стримов (умолч. 4)
-	Timeout time.Duration // таймаут одного GET (умолч. 20s)
+	Chunk      int           // байт на uplink-запрос (после b64 ~ +33%)
+	Workers    int           // параллельных uplink-воркеров
+	PollMs     int           // интервал heartbeat при простое
+	Stream     bool          // использовать стрим-даунлинк
+	Streams    int           // число параллельных стримов (умолч. 4)
+	PostUplink bool          // аплинк с payload через POST (Functions); пустой poll — GET
+	Timeout    time.Duration // таймаут одного GET (умолч. 20s)
 }
 
 type Client struct {
@@ -195,15 +196,25 @@ func (c *Client) workerLoop() {
 }
 
 func (c *Client) roundTrip(ua string, body []byte) ([]byte, error) {
-	p := "/s/" + c.sid + "/" + nonceHex()
+	nonce := nonceHex()
+	p := "/s/" + c.sid + "/" + nonce
+	method := http.MethodGet
+	var reqBody io.Reader
 	if len(body) > 0 {
-		p += "/" + base64.RawURLEncoding.EncodeToString(body)
+		if c.cfg.PostUplink {
+			method = http.MethodPost
+			reqBody = bytes.NewReader(body)
+		} else {
+			p += "/" + base64.RawURLEncoding.EncodeToString(body)
+		}
 	}
-	u := *c.base
-	u.Path = p
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	reqURL, hdrPath := tunnelRequestURL(c.base, p)
+	req, err := http.NewRequest(method, reqURL, reqBody)
 	if err != nil {
 		return nil, err
+	}
+	if hdrPath != "" {
+		req.Header.Set("X-Yctun-Path", hdrPath)
 	}
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", ua)
@@ -249,11 +260,13 @@ func (c *Client) streamLoop() {
 }
 
 func (c *Client) streamOnce(ua string) error {
-	u := *c.base
-	u.Path = "/s/" + c.sid + "/stream/" + nonceHex()
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	reqURL, hdrPath := tunnelRequestURL(c.base, "/s/"+c.sid+"/stream/"+nonceHex())
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
 		return err
+	}
+	if hdrPath != "" {
+		req.Header.Set("X-Yctun-Path", hdrPath)
 	}
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", ua)

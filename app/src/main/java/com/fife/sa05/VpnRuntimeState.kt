@@ -41,7 +41,7 @@ enum class VpnRuntimeComponent(val title: String) {
     TUN2SOCKS("tun2socks"),
     BYEDPI("ByeDPI"),
     TELEGRAM("Telegram"),
-    YCTUN("CDN-туннель")
+    YCTUN("БС-туннель")
 }
 
 enum class VpnComponentState {

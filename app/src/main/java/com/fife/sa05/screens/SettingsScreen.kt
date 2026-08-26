@@ -443,13 +443,13 @@ internal fun HostPingList(
     results: Map<String, String>,
     activePing: String?,
     onPing: (XrayHost) -> Unit,
-    isCdnProfile: Boolean = false,
+    isBsProfile: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    if (isCdnProfile) {
+    if (isBsProfile) {
         Column(modifier.padding(top = 8.dp)) {
             Text(
-                "Пинг для CDN-туннеля недоступен: трафик идёт через Yandex Cloud CDN, " +
+                "Пинг для БС-туннеля недоступен: трафик идёт через Yandex Cloud Functions, " +
                     "а не через outbound провайдера."
             )
         }

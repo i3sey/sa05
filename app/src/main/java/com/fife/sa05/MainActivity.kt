@@ -326,6 +326,7 @@ private fun XrayScreen(
     val vpnRuntime by VpnRuntimeState.observe(context).collectAsState()
     val telegramRuntime by TelegramProxyRuntimeState.observe(context).collectAsState()
     val activeSocksPort by XrayVpnService.socksPort.collectAsState()
+    val trafficUsage by XrayVpnService.trafficUsage.collectAsState()
     val importUrl by subscriptionImport.collectAsState()
     val backendState = vpnRuntime.status
     val snackbarHostState = remember { SnackbarHostState() }
@@ -800,6 +801,7 @@ private fun XrayScreen(
                     connectionCheck = connectionCheck,
                     telegramRuntime = telegramRuntime,
                     updateState = updateState,
+                    trafficUsage = trafficUsage,
                     onSelectProfile = { id ->
                         when (
                             profileSwitchAction(
@@ -973,7 +975,7 @@ private fun XrayScreen(
                             ?: preferences.config,
                         results = pingResults,
                         activePing = activePing,
-                        isCdnProfile = CdnProfile.isCdn(subscription.activeProfile),
+                        isBsProfile = BsProfile.isBs(subscription.activeProfile),
                         onPing = { host ->
                             pingEngine.cancel()
                             pingJob?.cancel()

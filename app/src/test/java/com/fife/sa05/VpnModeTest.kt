@@ -43,21 +43,21 @@ class VpnModeTest {
     }
 
     @Test
-    fun cdnPseudoServerForcesYctunRegardlessOfAdvancedMode() {
-        val cdn = CdnProfile.build(
+    fun bsPseudoServerForcesYctunRegardlessOfAdvancedMode() {
+        val bs = BsProfile.build(
             YctunParams(
-                baseUrl = "https://dom.sa05.eu.cc",
+                baseUrl = "https://functions.yandexcloud.net/d4e4etbt3unqg8k9ac4n",
                 psk = "0000000000000000000000000000000000000000000000000000000000000000",
                 serverPub = "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
             )
         )
         val settings = XraySettings(
-            config = cdn.json,
+            config = bs.json,
             advancedModeEnabled = false,
             vpnBackend = VpnBackend.FULL_AUTO,
             subscription = SubscriptionState(
-                profiles = listOf(cdn),
-                activeProfileId = CdnProfile.ID
+                profiles = listOf(bs),
+                activeProfileId = BsProfile.ID
             )
         )
 

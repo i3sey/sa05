@@ -131,11 +131,11 @@ object XrayPreferences {
     )
 
     internal fun decodeSettings(preferences: Preferences): XraySettings {
-        var subscription = decodeSubscription(preferences[subscriptionKey]).withCdnProfile()
+        var subscription = decodeSubscription(preferences[subscriptionKey]).withBsProfile()
         val storedBackend = preferences[vpnBackendKey]
         // Раньше CDN был режимом Advanced: переносим выбор на псевдо-сервер.
-        if (storedBackend == "YCTUN" && subscription.profiles.any { CdnProfile.isCdn(it) }) {
-            subscription = subscription.copy(activeProfileId = CdnProfile.ID)
+        if (storedBackend == "YCTUN" && subscription.profiles.any { BsProfile.isBs(it) }) {
+            subscription = subscription.copy(activeProfileId = BsProfile.ID)
         }
         return XraySettings(
             config = subscription.activeProfile?.json

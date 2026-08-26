@@ -11,6 +11,7 @@ package chanhttp
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -97,7 +98,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleStream(w, r, sid)
 		log.Printf("STREAM closed sid=%s", sid[:8])
 	default:
-		s.handleUplink(w, sid, parts)
+		s.handleUplink(w, r, sid, parts)
 	}
 }
 
@@ -179,8 +180,8 @@ func (s *Server) dispatchLoop(st *sidState) {
 	}
 }
 
-// uplink: /s/<sid>/<nonce>[/<b64(payload)>]
-func (s *Server) handleUplink(w http.ResponseWriter, sid string, parts []string) {
+// uplink: GET /s/<sid>/<nonce>[/<b64(payload)>] или POST /s/<sid>/<nonce> (тело = payload)
+func (s *Server) handleUplink(w http.ResponseWriter, r *http.Request, sid string, parts []string) {
 	s.mu.Lock()
 	st := s.sid[sid]
 	s.mu.Unlock()
@@ -193,26 +194,33 @@ func (s *Server) handleUplink(w http.ResponseWriter, sid string, parts []string)
 	st.lastSeen = time.Now()
 	st.mu.Unlock()
 
-	if len(parts) >= 3 && parts[2] != "" {
-		payload, err := base64.RawURLEncoding.DecodeString(parts[2])
-		if err == nil {
-			n := 0
-			for {
-				total, ok := proto.NextFrameLen(payload)
-				if !ok {
-					break
-				}
-				if pt, err := st.opener.Open(payload[:total]); err == nil {
-					if f, err := proto.DecodeMux(pt); err == nil {
-						st.sess.HandleFrame(f)
-						n++
-					}
-				}
-				payload = payload[total:]
+	var payload []byte
+	if r.Method == http.MethodPost {
+		payload, _ = io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	} else if len(parts) >= 3 && parts[2] != "" {
+		var err error
+		payload, err = base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil {
+			payload = nil
+		}
+	}
+	if len(payload) > 0 {
+		n := 0
+		for {
+			total, ok := proto.NextFrameLen(payload)
+			if !ok {
+				break
 			}
-			if n > 0 {
-				log.Printf("UPLINK sid=%s frames=%d", sid[:8], n)
+			if pt, err := st.opener.Open(payload[:total]); err == nil {
+				if f, err := proto.DecodeMux(pt); err == nil {
+					st.sess.HandleFrame(f)
+					n++
+				}
 			}
+			payload = payload[total:]
+		}
+		if n > 0 {
+			log.Printf("UPLINK sid=%s frames=%d", sid[:8], n)
 		}
 	}
 
