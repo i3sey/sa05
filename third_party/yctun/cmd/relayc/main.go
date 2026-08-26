@@ -41,6 +41,7 @@ type Config struct {
 func main() {
 	configPath := flag.String("config", "relayc.json", "путь к конфигу")
 	flag.Parse()
+	usePublicDNS()
 
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
@@ -175,6 +176,28 @@ func randHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// Android (GOOS=android, CGO off) читает resolv.conf → [::1]:53, а netd
+// приложениям туда не отвечает. Hello идёт до поднятия SOCKS, поэтому
+// резолвим через публичный DNS напрямую — UID клиента исключён из TUN.
+// На БС сначала Yandex DNS (77.88.8.8), затем общие фолбэки.
+func usePublicDNS() {
+	net.DefaultResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 3 * time.Second}
+			var last error
+			for _, dns := range []string{"77.88.8.8:53", "8.8.8.8:53", "1.1.1.1:53"} {
+				c, err := d.DialContext(ctx, "udp", dns)
+				if err == nil {
+					return c, nil
+				}
+				last = err
+			}
+			return nil, last
+		},
+	}
 }
 
 func httpGet(base *url.URL, p string) ([]byte, error) {
