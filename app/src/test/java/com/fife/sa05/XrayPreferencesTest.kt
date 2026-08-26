@@ -129,4 +129,35 @@ class XrayPreferencesTest {
         assertEquals("good", decoded.single().networkKey)
         assertTrue(decoded.none { it.preset == ZapretPreset.AUTO })
     }
+
+    @Test
+    fun legacyYctunBackendDoesNotForceBsProfileSelection() {
+        val provider = SubscriptionProfile(
+            id = "provider-1",
+            remarks = "Germany",
+            json = """{"inbounds":[{"listen":"127.0.0.1","port":10808,"protocol":"socks","settings":{"udp":true}}],"outbounds":[]}"""
+        )
+        val bs = BsProfile.build(
+            YctunParams(
+                baseUrl = "https://functions.yandexcloud.net/test",
+                psk = "0000000000000000000000000000000000000000000000000000000000000000",
+                serverPub = "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
+            )
+        )
+        val encoded = XrayPreferences.encodeSubscription(
+            SubscriptionState(
+                profiles = listOf(provider, bs),
+                activeProfileId = provider.id
+            )
+        )
+        val settings = XrayPreferences.decodeSettings(
+            preferencesOf(
+                stringPreferencesKey("vpn_backend") to "YCTUN",
+                stringPreferencesKey("subscription") to encoded
+            )
+        )
+
+        assertEquals(provider.id, settings.subscription.activeProfileId)
+        assertEquals(VpnBackend.PROXY_ONLY, settings.vpnBackend)
+    }
 }

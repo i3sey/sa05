@@ -643,14 +643,13 @@ private fun XrayScreen(
     }
     LaunchedEffect(Unit) {
         checkAppUpdate(silent = true)
+        XrayPreferences.migrateLegacyYctunBackendIfNeeded(context)
+        BsTraffic.reconcile(context)
     }
     LaunchedEffect(subscription.url, subscription.updatedAt, importUrl) {
         if (subscription.url.isNotBlank() && importUrl == null) {
             updateSubscription(subscription.url, silent = true)
         }
-    }
-    LaunchedEffect(Unit) {
-        BsTraffic.reconcile(context)
     }
     LaunchedEffect(importUrl) {
         importUrl?.let {

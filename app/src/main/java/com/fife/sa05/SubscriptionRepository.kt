@@ -208,15 +208,7 @@ class SubscriptionRepository(private val context: Context) {
                 yctunJson = decodeYctunHeader(
                     connection.getHeaderField("x-sa05-yctun")
                 )
-            ).withBsProfile().let { state ->
-                if (BsProfile.isBs(previousActive) &&
-                    state.profiles.any { BsProfile.isBs(it) }
-                ) {
-                    state.copy(activeProfileId = BsProfile.ID)
-                } else {
-                    state
-                }
-            }
+            ).withBsProfile()
             XrayPreferences.saveSubscription(context, next)
             return SubscriptionUpdateResult.Updated(next)
         } finally {

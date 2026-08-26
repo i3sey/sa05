@@ -146,12 +146,8 @@ object XrayPreferences {
     )
 
     internal fun decodeSettings(preferences: Preferences): XraySettings {
-        var subscription = decodeSubscription(preferences[subscriptionKey]).withBsProfile()
+        val subscription = decodeSubscription(preferences[subscriptionKey]).withBsProfile()
         val storedBackend = preferences[vpnBackendKey]
-        // Раньше CDN был режимом Advanced: переносим выбор на псевдо-сервер.
-        if (storedBackend == "YCTUN" && subscription.profiles.any { BsProfile.isBs(it) }) {
-            subscription = subscription.copy(activeProfileId = BsProfile.ID)
-        }
         return XraySettings(
             config = subscription.activeProfile?.json
                 ?: preferences[configKey]
@@ -199,6 +195,14 @@ object XrayPreferences {
     suspend fun saveAdvancedModeEnabled(context: Context, enabled: Boolean) {
         dataStore(context).edit { it[advancedModeKey] = enabled }
         VpnRuntimeState.requestTileRefresh(context)
+    }
+
+    suspend fun migrateLegacyYctunBackendIfNeeded(context: Context) {
+        dataStore(context).edit { preferences ->
+            if (preferences[vpnBackendKey] == "YCTUN") {
+                preferences[vpnBackendKey] = VpnBackend.PROXY_ONLY.name
+            }
+        }
     }
 
     suspend fun saveVpnBackend(context: Context, backend: VpnBackend) {
