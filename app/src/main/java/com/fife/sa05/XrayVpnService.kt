@@ -823,6 +823,7 @@ class XrayVpnService : VpnService() {
     }
 
     private fun scheduleNetworkRecoveryCheck() {
+        if (explicitStop) return
         val runtime = VpnRuntimeState.read(this)
         if (!runtime.requested || runtime.failureKind == VpnFailureKind.AUTHORIZATION) return
         networkRecoveryJob?.cancel()
@@ -833,6 +834,7 @@ class XrayVpnService : VpnService() {
     }
 
     private suspend fun handleNetworkRecoveryCheck() {
+        if (explicitStop) return
         val runtime = VpnRuntimeState.read(this)
         if (!runtime.requested || runtime.failureKind == VpnFailureKind.AUTHORIZATION) return
         val network = currentNetwork()
@@ -1233,8 +1235,11 @@ class XrayVpnService : VpnService() {
 
     private fun closeProcess(process: Process?) {
         if (process == null) return
-        runCatching { process.inputStream.close() }
         runCatching { process.destroy() }
+        runCatching { process.destroyForcibly() }
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
+        runCatching { process.outputStream.close() }
     }
 
     private fun copyGeoAssets() {
@@ -1257,14 +1262,14 @@ class XrayVpnService : VpnService() {
         processMonitorJob = null
         fullAutoOptimizationJob?.cancel()
         fullAutoOptimizationJob = null
-        stopProcesses()
+        VpnRuntimeState.clear(this)
         stopTrafficMeter()
+        stopProcesses()
         runningProfile = null
         runningLabel = ""
         _socksPort.value = null
         _zapretAutoProgress.value = ZapretAutoProgress()
         verificationMessage = ""
-        VpnRuntimeState.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -1375,7 +1380,12 @@ class XrayVpnService : VpnService() {
     override fun onDestroy() {
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
         networkRecoveryJob?.cancel()
+        networkRecoveryJob = null
         processMonitorJob?.cancel()
+        processMonitorJob = null
+        if (explicitStop) {
+            VpnRuntimeState.clear(this)
+        }
         stopProcesses()
         stopTrafficMeter()
         runningProfile = null

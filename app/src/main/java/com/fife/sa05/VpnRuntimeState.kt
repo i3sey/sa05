@@ -104,7 +104,7 @@ object VpnRuntimeState {
                 prefs.getString(KEY_STATUS, null),
                 VpnRunStatus.DISCONNECTED
             ),
-            backend = VpnBackend.fromStoredName(prefs.getString(KEY_BACKEND, null)),
+            backend = parseBackend(prefs.getString(KEY_BACKEND, null)),
             profileId = prefs.getString(KEY_PROFILE_ID, "").orEmpty(),
             profileName = prefs.getString(KEY_PROFILE_NAME, "").orEmpty(),
             message = prefs.getString(KEY_MESSAGE, "").orEmpty(),
@@ -208,8 +208,11 @@ object VpnRuntimeState {
         profileName = ""
     )
 
-    private inline fun <reified T : Enum<T>> enumValue(raw: String?, fallback: T): T =
+    internal inline fun <reified T : Enum<T>> enumValue(raw: String?, fallback: T): T =
         raw?.let { value -> enumValues<T>().firstOrNull { it.name == value } } ?: fallback
+
+    internal fun parseBackend(raw: String?): VpnBackend =
+        enumValue(raw, VpnBackend.PROXY_ONLY)
 
     private fun encodeComponents(components: List<VpnComponentSnapshot>): String =
         components.joinToString(";") { "${it.component.name}:${it.state.name}" }

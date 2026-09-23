@@ -59,6 +59,7 @@ object BackendController {
     fun stopRunning(context: Context) {
         if (VpnRuntimeState.read(context).status != VpnRunStatus.DISCONNECTED) {
             XrayVpnService.stop(context)
+            VpnRuntimeState.clear(context)
         }
     }
 }

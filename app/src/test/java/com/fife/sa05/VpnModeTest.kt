@@ -43,6 +43,16 @@ class VpnModeTest {
     }
 
     @Test
+    fun runtimeStateParsesAllBackendsIncludingYctun() {
+        assertEquals(VpnBackend.YCTUN, VpnRuntimeState.parseBackend("YCTUN"))
+        assertEquals(VpnBackend.PROXY_ONLY, VpnRuntimeState.parseBackend("PROXY_ONLY"))
+        assertEquals(VpnBackend.LOCAL_BYPASS, VpnRuntimeState.parseBackend("LOCAL_BYPASS"))
+        assertEquals(VpnBackend.FULL_AUTO, VpnRuntimeState.parseBackend("FULL_AUTO"))
+        assertEquals(VpnBackend.PROXY_ONLY, VpnRuntimeState.parseBackend(null))
+        assertEquals(VpnBackend.PROXY_ONLY, VpnRuntimeState.parseBackend("unknown"))
+    }
+
+    @Test
     fun bsPseudoServerForcesYctunRegardlessOfAdvancedMode() {
         val bs = BsProfile.build(
             YctunParams(
