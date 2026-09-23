@@ -332,6 +332,11 @@ class XrayVpnService : VpnService() {
             }
         }
         var runtimeJson = XrayConfig.quietRuntime(validated.runtimeJson)
+        if (BuildConfig.DEBUG && runningBackend == VpnBackend.YCTUN) {
+            val debugRoot = org.json.JSONObject(runtimeJson)
+            debugRoot.getJSONObject("log").put("loglevel", "info")
+            runtimeJson = debugRoot.toString()
+        }
         if (!fullAuto && yctunParams == null && runningBackend == VpnBackend.PROXY_ONLY) {
             runtimeJson = XrayConfig.blockUdp443(runtimeJson)
         }
@@ -363,8 +368,8 @@ class XrayVpnService : VpnService() {
     }
 
     /**
-     * БС-туннель: relayc (SOCKS5 на 127.0.0.1:10812, poll через
-     * Yandex Cloud Functions к relayd на VPS) + Xray поверх него.
+     * БС-туннель: relayc (SOCKS5 на 127.0.0.1:10812, GET/poll через
+     * Yandex Cloud CDN к отдельному relayd на VPS) + Xray поверх него.
      */
     private suspend fun startYctunBackend(): BackendStart {
         val profileJson = runningProfile?.json ?: runningSettings.config
@@ -375,8 +380,17 @@ class XrayVpnService : VpnService() {
             )
         val binary = File(applicationInfo.nativeLibraryDir, "librelayc.so")
         check(binary.exists()) { "librelayc.so не найден" }
+        val networkDns = connectivityManager.activeNetwork?.let { network ->
+            connectivityManager.getLinkProperties(network)?.dnsServers
+                ?.map { it.hostAddress.orEmpty() }
+                ?.filter { it.isNotBlank() }
+        }.orEmpty()
         val configFile = File(filesDir, "yctun.json").apply {
-            writeText(params.relaycConfig("127.0.0.1:$YCTUN_SOCKS_PORT"))
+            writeText(params.relaycConfig("127.0.0.1:$YCTUN_SOCKS_PORT", networkDns))
+            setReadable(false, false)
+            setReadable(true, true)
+            setWritable(false, false)
+            setWritable(true, true)
         }
         lastNativeError.set("")
         relaycProcess = ProcessBuilder(
@@ -1124,8 +1138,8 @@ class XrayVpnService : VpnService() {
             "--socks-server-addr", "127.0.0.1:$socksPort",
             "--tunmtu", "1500",
             "--sock-path", socketFile.absolutePath,
-            "--enable-udprelay",
-            "--loglevel", "none"
+            "--socks5-udp",
+            "--loglevel", if (BuildConfig.DEBUG && runningBackend == VpnBackend.YCTUN) "debug" else "none"
         )
             .directory(filesDir)
             .redirectErrorStream(true)
@@ -1188,7 +1202,7 @@ class XrayVpnService : VpnService() {
                 process.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         val lower = line.lowercase()
-                        val capture = tag == "yctun" ||
+                        val capture = tag == "yctun" || tag == "tun2socks" || tag == "xray" ||
                             "error" in lower || "failed" in lower ||
                             "invalid" in lower || "fatal" in lower
                         if (capture) {

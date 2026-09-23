@@ -189,9 +189,16 @@ app/build/outputs/apk/debug/app-debug.apk
   «БС-туннель» into the profile list. Selecting that server runs the
   `YCTUN` runtime backend. It dials the internet through a poll tunnel
   over Yandex Cloud Functions: Xray -> relayc (:10812) ->
-  `https://functions.yandexcloud.net/<id>` -> relayd on the origin VPS.
+  `https://dom.sa05.eu.cc` -> CDN -> separate relayd on de2:18443.
   Server side and the wire protocol live in `third_party/yctun/` (see its
-  PIN.md and README.md). BS tunnel is not offered as an Advanced VPN mode;
+  PIN.md and README.md). The current route is HTTPS GET through Yandex CDN
+  `dom.sa05.eu.cc` to isolated TLS origin `data.sa05.eu.cc:18443` on de2.
+  `cdn-pilot-origin.service` runs relayd alongside, without touching VPN :443.
+  The legacy `x-sa05-yctun` header still points at Cloud Functions; SA05
+  maps only that known format to CDN and pins the new server public key.
+  Current subscriptions share one PSK: concurrent sessions work, but individual
+  revocation requires per-user credentials from the provider. LTE whitelist
+  availability has not been verified. BS tunnel is not offered as an Advanced VPN mode;
   Full Auto / Local Bypass / Proxy Only are ignored while the BS pseudo-server
   is selected.
 - The tunnel credentials (`base_url`, `psk`, `server_pub`) are NOT embedded

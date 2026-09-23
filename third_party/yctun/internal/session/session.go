@@ -19,6 +19,7 @@ const (
 	MaxRecvBuf = 2 << 20 // окно приёма (рекламируемое)
 	MaxSendBuf = 4 << 20 // предел локальной буферизации на отправку
 	DataChunk  = 8 << 10 // макс. payload DATA-фрейма
+	MaxStreams = 128     // макс. одновременных стримов на сессию
 )
 
 const (
@@ -101,6 +102,7 @@ func (s *Stream) Close() error {
 	} else {
 		s.mu.Unlock()
 	}
+	s.sess.remove(s.id)
 	return nil
 }
 
@@ -158,7 +160,7 @@ func (s *Stream) deliverData(seq uint32, data []byte) {
 		return
 	}
 	if seq > s.recvNext {
-		if _, ok := s.reorder[seq]; !ok {
+		if _, ok := s.reorder[seq]; !ok && s.reorderBytes+int64(len(data)) <= MaxRecvBuf {
 			s.reorder[seq] = data
 			s.reorderBytes += int64(len(data))
 		}
@@ -184,7 +186,7 @@ func (s *Stream) deliverData(seq uint32, data []byte) {
 func (s *Stream) ackState() (uint32, uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	seq := uint32(0)
+	seq := ^uint32(0) // no contiguous DATA received yet
 	if s.recvNext > 0 {
 		seq = s.recvNext - 1
 	}
@@ -196,7 +198,7 @@ func (s *Stream) applyAck(seq uint32, win uint32) {
 	s.mu.Lock()
 	kept := s.pend[:0]
 	for _, p := range s.pend {
-		if p.seq > seq {
+		if seq == ^uint32(0) || p.seq > seq {
 			kept = append(kept, p)
 		} else {
 			s.inFlight -= int64(len(p.data))
@@ -258,13 +260,15 @@ func (s *Stream) sendFin(out chan<- proto.Frame) {
 // ---------- Session ----------
 
 type Session struct {
-	mu      sync.Mutex
-	streams map[uint32]*Stream
-	nextID  uint32
-	outCh   chan proto.Frame
-	onOpen  func(addr string) (net.Conn, error) // только сервер
-	opening map[uint32]chan error               // только клиент
-	closed  bool
+	mu            sync.Mutex
+	streams       map[uint32]*Stream
+	nextID        uint32
+	outCh         chan proto.Frame
+	onOpen        func(addr string) (net.Conn, error) // только сервер
+	opening       map[uint32]chan error               // только клиент
+	serverPending map[uint32]struct{}
+	conns         map[uint32]net.Conn
+	closed        bool
 }
 
 type OpenResult struct {
@@ -274,10 +278,12 @@ type OpenResult struct {
 
 func New(onOpen func(string) (net.Conn, error)) *Session {
 	return &Session{
-		streams: map[uint32]*Stream{},
-		outCh:   make(chan proto.Frame, 4096),
-		onOpen:  onOpen,
-		opening: map[uint32]chan error{},
+		streams:       map[uint32]*Stream{},
+		outCh:         make(chan proto.Frame, 256),
+		onOpen:        onOpen,
+		opening:       map[uint32]chan error{},
+		serverPending: map[uint32]struct{}{},
+		conns:         map[uint32]net.Conn{},
 	}
 }
 
@@ -291,8 +297,21 @@ func (s *Session) Close() {
 	}
 	s.closed = true
 	for id, st := range s.streams {
+		st.mu.Lock()
 		st.closeLocked(ErrClosed)
+		st.mu.Unlock()
 		delete(s.streams, id)
+	}
+	for id, conn := range s.conns {
+		conn.Close()
+		delete(s.conns, id)
+	}
+	for id, ch := range s.opening {
+		select {
+		case ch <- ErrClosed:
+		default:
+		}
+		delete(s.opening, id)
 	}
 	s.mu.Unlock()
 }
@@ -330,8 +349,17 @@ func (s *Session) Open(ctx context.Context, addr string) (*Stream, error) {
 
 func (s *Session) remove(id uint32) {
 	s.mu.Lock()
+	if st := s.streams[id]; st != nil {
+		st.mu.Lock()
+		st.closeLocked(ErrClosed)
+		st.mu.Unlock()
+	}
 	delete(s.streams, id)
 	delete(s.opening, id)
+	if conn := s.conns[id]; conn != nil {
+		conn.Close()
+		delete(s.conns, id)
+	}
 	s.mu.Unlock()
 }
 
@@ -343,22 +371,44 @@ func (s *Session) HandleFrame(f proto.Frame) {
 			s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeRst}
 			return
 		}
-		// не блокируем транспорт: dial в горутине
+		s.mu.Lock()
+		if s.closed || len(s.streams)+len(s.serverPending) >= MaxStreams {
+			s.mu.Unlock()
+			s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeOpenErr, Data: []byte("stream limit")}
+			return
+		}
+		if _, ok := s.streams[f.Stream]; ok {
+			s.mu.Unlock()
+			return
+		}
+		if _, ok := s.serverPending[f.Stream]; ok {
+			s.mu.Unlock()
+			return
+		}
+		s.serverPending[f.Stream] = struct{}{}
+		s.mu.Unlock()
 		go func() {
-			addr := string(f.Data)
-			conn, err := s.onOpen(addr)
-			if err != nil {
-				s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeOpenErr, Data: []byte(err.Error())}
-				s.remove(f.Stream)
+			conn, err := s.onOpen(string(f.Data))
+			s.mu.Lock()
+			delete(s.serverPending, f.Stream)
+			closed := s.closed
+			if err == nil && !closed {
+				st := newStream(s, f.Stream)
+				st.peerWin = MaxRecvBuf
+				s.streams[f.Stream] = st
+				s.conns[f.Stream] = conn
+				s.mu.Unlock()
+				s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeOpenOK, Win: uint32(MaxRecvBuf)}
+				s.runPumps(st, conn)
 				return
 			}
-			st := newStream(s, f.Stream)
-			st.peerWin = MaxRecvBuf
-			s.mu.Lock()
-			s.streams[f.Stream] = st
 			s.mu.Unlock()
-			s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeOpenOK, Win: uint32(MaxRecvBuf)}
-			s.runPumps(st, conn)
+			if conn != nil {
+				conn.Close()
+			}
+			if !closed {
+				s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeOpenErr, Data: []byte("connect failed")}
+			}
 		}()
 
 	case proto.TypeOpenOK:
@@ -394,6 +444,9 @@ func (s *Session) HandleFrame(f proto.Frame) {
 		}
 
 	case proto.TypeData:
+		if len(f.Data) > DataChunk {
+			return
+		}
 		s.mu.Lock()
 		st := s.streams[f.Stream]
 		s.mu.Unlock()
@@ -450,8 +503,12 @@ func (s *Session) Resend() {
 
 // runPumps — два насоса на стрим (обе стороны одинаковы).
 func (s *Session) runPumps(st *Stream, conn net.Conn) {
+	var pumps sync.WaitGroup
+	pumps.Add(2)
+	go func() { pumps.Wait(); s.remove(st.id) }()
 	// app -> сеть
 	go func() {
+		defer pumps.Done()
 		buf := make([]byte, 32<<10)
 		for {
 			n, err := conn.Read(buf)
@@ -470,6 +527,7 @@ func (s *Session) runPumps(st *Stream, conn net.Conn) {
 	}()
 	// сеть -> app
 	go func() {
+		defer pumps.Done()
 		buf := make([]byte, 32<<10)
 		for {
 			n, eof := st.read(buf)

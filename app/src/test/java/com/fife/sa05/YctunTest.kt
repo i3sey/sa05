@@ -9,13 +9,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class YctunTest {
-    private val baseUrl = "https://functions.yandexcloud.net/d4e4etbt3unqg8k9ac4n"
+    private val baseUrl = "https://dom.sa05.eu.cc"
 
     private val profile = """
         {
           "remarks": "tunnel profile",
           "sa05_yctun": {
             "base_url": "$baseUrl",
+            "user_id": "test_user",
             "psk": "0000000000000000000000000000000000000000000000000000000000000000",
             "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
           },
@@ -36,14 +37,15 @@ class YctunTest {
 
         assertNotNull(params)
         assertEquals(baseUrl, params!!.baseUrl)
+        assertEquals("test_user", params.userId)
         assertEquals("0000000000000000000000000000000000000000000000000000000000000000", params.psk)
         assertEquals("b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101", params.serverPub)
         assertFalse(params.stream)
         assertEquals(0, params.streams)
-        assertEquals(1, params.workers)
-        assertEquals(8192, params.chunk)
-        assertEquals(5000, params.pollMs)
-        assertTrue(params.postUplink)
+        assertEquals(3, params.workers)
+        assertEquals(4096, params.chunk)
+        assertEquals(400, params.pollMs)
+        assertFalse(params.postUplink)
     }
 
     @Test
@@ -53,9 +55,10 @@ class YctunTest {
                 "sa05_yctun",
                 JSONObject()
                     .put("base_url", baseUrl)
+                    .put("user_id", "test_user")
                     .put("psk", "0000000000000000000000000000000000000000000000000000000000000000")
                     .put("server_pub", "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101")
-                    .put("stream", true)
+                    .put("stream", false)
                     .put("streams", 8)
                     .put("workers", 3)
                     .put("chunk", 9000)
@@ -66,12 +69,29 @@ class YctunTest {
 
         val params = YctunParams.parse(withTuning)!!
 
-        assertTrue(params.stream)
+        assertFalse(params.stream)
         assertEquals(8, params.streams)
         assertEquals(3, params.workers)
         assertEquals(9000, params.chunk)
         assertEquals(250, params.pollMs)
         assertFalse(params.postUplink)
+    }
+
+    @Test
+    fun oldSubscriptionHeaderMigratesWithoutChangingTheProvider() {
+        val state = SubscriptionState(yctunJson = """
+            {"base_url":"https://functions.yandexcloud.net/old-id",
+             "psk":"0000000000000000000000000000000000000000000000000000000000000000",
+             "server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101",
+             "post_uplink":true,"stream":false,"workers":1,"poll_ms":5000}
+        """.trimIndent())
+        val migrated = YctunParams.parseSubscription(state)!!
+        assertEquals("https://dom.sa05.eu.cc", migrated.baseUrl)
+        assertEquals("shared", migrated.userId)
+        assertEquals("89401dcc26a3376fdecfe1e1ed81939814de895c44b8a4230b1ff37a267a5a3c", migrated.serverPub)
+        assertFalse(migrated.postUplink)
+        assertEquals(3, migrated.workers)
+        assertEquals(400, migrated.pollMs)
     }
 
     @Test
@@ -86,6 +106,7 @@ class YctunTest {
             yctunJson = """
                 {
                   "base_url": "$baseUrl",
+            "user_id": "test_user",
                   "psk": "0000000000000000000000000000000000000000000000000000000000000000",
                   "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101",
                   "streams": 8
@@ -140,7 +161,7 @@ class YctunTest {
         val state = SubscriptionState(
             url = "https://sub.example.com/x",
             yctunJson = """
-                {"base_url":"$baseUrl","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}
+                {"base_url":"$baseUrl","user_id":"test_user","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}
             """.trimIndent()
         )
 
@@ -154,14 +175,14 @@ class YctunTest {
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsInvalidPsk() {
         YctunParams.parse(
-            """{"sa05_yctun":{"base_url":"$baseUrl","psk":"zz","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
+            """{"sa05_yctun":{"base_url":"$baseUrl","user_id":"test_user","user_id":"test_user","psk":"zz","server_pub":"b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"}}"""
         )
     }
 
     @Test(expected = IllegalArgumentException::class)
     fun parseRejectsInvalidServerPub() {
         YctunParams.parse(
-            """{"sa05_yctun":{"base_url":"$baseUrl","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"short"}}"""
+            """{"sa05_yctun":{"base_url":"$baseUrl","user_id":"test_user","psk":"0000000000000000000000000000000000000000000000000000000000000000","server_pub":"short"}}"""
         )
     }
 
@@ -178,15 +199,16 @@ class YctunTest {
         val root = JSONObject(config)
 
         assertEquals(baseUrl, root.getString("base_url"))
+        assertEquals("test_user", root.getString("user_id"))
         assertEquals("127.0.0.1:10812", root.getString("listen"))
         assertEquals("0000000000000000000000000000000000000000000000000000000000000000", root.getString("psk"))
         assertEquals("b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101", root.getString("server_pub"))
         assertFalse(root.getBoolean("stream"))
         assertEquals(0, root.getInt("streams"))
-        assertEquals(1, root.getInt("workers"))
-        assertEquals(8192, root.getInt("chunk"))
-        assertEquals(5000, root.getInt("poll_ms"))
-        assertTrue(root.getBoolean("post_uplink"))
+        assertEquals(3, root.getInt("workers"))
+        assertEquals(4096, root.getInt("chunk"))
+        assertEquals(400, root.getInt("poll_ms"))
+        assertFalse(root.getBoolean("post_uplink"))
     }
 
     @Test
@@ -238,6 +260,7 @@ class YctunTest {
             yctunJson = """
                 {
                   "base_url": "$baseUrl",
+            "user_id": "test_user",
                   "psk": "0000000000000000000000000000000000000000000000000000000000000000",
                   "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
                 }
@@ -298,6 +321,7 @@ class YctunTest {
             yctunJson = """
                 {
                   "base_url": "$baseUrl",
+            "user_id": "test_user",
                   "psk": "0000000000000000000000000000000000000000000000000000000000000000",
                   "server_pub": "b2f5d19261a2305fb6a39f1ed1133bb2cd46ce72efa11089d67c44324b69a101"
                 }

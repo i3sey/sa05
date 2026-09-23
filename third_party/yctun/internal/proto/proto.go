@@ -7,6 +7,7 @@ package proto
 
 import (
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -63,6 +64,31 @@ func DeriveKeys(priv, peerPub [32]byte, psk []byte) (c2s, s2c []byte, err error)
 		return nil, nil, err
 	}
 	return c2s, s2c, nil
+}
+
+// HelloMAC proves possession of a user's PSK before the server allocates a session.
+// The version, user, sid and ephemeral key are bound to a short-lived challenge.
+func HelloMAC(psk []byte, user, sid, eph, timestamp, nonce string) []byte {
+	mac := hmac.New(sha256.New, psk)
+	for _, field := range []string{"yctun-v2-hello", user, sid, eph, timestamp, nonce} {
+		mac.Write([]byte(field))
+		mac.Write([]byte{0})
+	}
+	return mac.Sum(nil)
+}
+
+// DeriveSessionKeys isolates users and session IDs in the key schedule.
+func DeriveSessionKeys(priv, peerPub [32]byte, psk []byte, user, sid string) (c2s, s2c []byte, err error) {
+	shared, err := curve25519.X25519(priv[:], peerPub[:])
+	if err != nil {
+		return nil, nil, err
+	}
+	c2s, err = hkdfExpand(shared, psk, "yctun-v2-c2s/"+user+"/"+sid, 32)
+	if err != nil {
+		return nil, nil, err
+	}
+	s2c, err = hkdfExpand(shared, psk, "yctun-v2-s2c/"+user+"/"+sid, 32)
+	return
 }
 
 func hkdfExpand(ikm, salt []byte, info string, n int) ([]byte, error) {
@@ -153,17 +179,15 @@ func (o *Opener) Open(frame []byte) ([]byte, error) {
 		return nil, fmt.Errorf("bad frame length")
 	}
 	o.mu.Lock()
+	defer o.mu.Unlock()
 	if o.maxSet && seq <= o.max {
 		if o.max-seq >= replayWindow {
-			o.mu.Unlock()
 			return nil, ErrTooOld
 		}
 		if _, dup := o.seen[seq]; dup {
-			o.mu.Unlock()
 			return nil, ErrTooOld
 		}
 	}
-	o.mu.Unlock()
 	pt, err := o.aead.Open(nil, nonce(seq), frame[10:10+flen], nil)
 	if err != nil {
 		return nil, err
@@ -179,9 +203,8 @@ func (o *Opener) Open(frame []byte) ([]byte, error) {
 	return pt[1+padLen:], nil
 }
 
+// remember is called with o.mu held.
 func (o *Opener) remember(seq uint64) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
 	o.maxSet = true
 	if seq > o.max {
 		o.max = seq

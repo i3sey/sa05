@@ -4,33 +4,36 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Параметры режима «БС-туннель» (yctun через Yandex Cloud Functions).
+ * Параметры режима «БС-туннель» (GET через Yandex Cloud CDN).
  *
  * Credentials приходят блоком `sa05_yctun` в профиле или заголовком
  * `x-sa05-yctun`. Клиент добавляет псевдо-сервер [BsProfile] в список
  * подписки; выбор этого сервера запускает relayc + rewrite Xray:
  *
  *   tun2socks -> Xray (socks inbound) -> yctun outbound -> relayc :10812
- *   -> HTTPS functions.yandexcloud.net -> relayd на VPS -> интернет
+ *   -> HTTPS dom.sa05.eu.cc -> relayd на VPS -> интернет
  */
 data class YctunParams(
     val baseUrl: String,
+    val userId: String = "",
     val psk: String,
     val serverPub: String,
     val stream: Boolean = false,
     val streams: Int = 0,
-    val workers: Int = 1,
-    val chunk: Int = 8192,
-    val pollMs: Int = 5000,
-    val postUplink: Boolean = true
+    val workers: Int = 3,
+    val chunk: Int = 4096,
+    val pollMs: Int = 400,
+    val postUplink: Boolean = false
 ) {
     /** Конфиг для relayc (JSON-файл, `librelayc.so -config ...`). */
-    fun relaycConfig(listen: String): String = toBlock()
+    fun relaycConfig(listen: String, dnsServers: List<String> = emptyList()): String = toBlock()
         .put("listen", listen)
+        .put("dns_servers", JSONArray(dnsServers))
         .toString(2)
 
     fun toBlock(): JSONObject = JSONObject()
         .put("base_url", baseUrl)
+        .put("user_id", userId)
         .put("psk", psk)
         .put("server_pub", serverPub)
         .put("stream", stream)
@@ -42,6 +45,11 @@ data class YctunParams(
 
     companion object {
         const val BLOCK_KEY = "sa05_yctun"
+        // Public key only (never the PSK). The existing subscription header still
+        // describes the old Functions endpoint; migrate it locally until the
+        // provider updates that header. No panel or ordinary VPN changes needed.
+        private const val CDN_SERVER_PUB =
+            "89401dcc26a3376fdecfe1e1ed81939814de895c44b8a4230b1ff37a267a5a3c"
 
         /** Возвращает параметры туннеля из JSON профиля или null, если блока нет. */
         fun parse(profileJson: String): YctunParams? {
@@ -77,22 +85,38 @@ data class YctunParams(
             parse(profileJson) ?: parseSubscription(subscription)
 
         private fun parseBlock(block: JSONObject): YctunParams {
-            val baseUrl = requireText(block, "base_url")
+            val originalUrl = requireText(block, "base_url")
+            val legacy = try {
+                val uri = java.net.URI(originalUrl)
+                uri.scheme == "https" && uri.host == "functions.yandexcloud.net" &&
+                    uri.port == -1 && uri.userInfo == null && uri.rawQuery == null &&
+                    uri.rawFragment == null && uri.path.matches(Regex("/[A-Za-z0-9_-]+")) &&
+                    !block.has("user_id")
+            } catch (_: Exception) { false }
+            val baseUrl = if (legacy) "https://dom.sa05.eu.cc" else originalUrl
+            val userId = if (legacy) "shared" else requireText(block, "user_id")
+            if (!userId.matches(Regex("[A-Za-z0-9_-]{1,48}"))) {
+                throw IllegalArgumentException("$BLOCK_KEY: недопустимый user_id")
+            }
             val psk = requireText(block, "psk")
-            val serverPub = requireText(block, "server_pub")
+            val serverPub = if (legacy) CDN_SERVER_PUB else requireText(block, "server_pub")
             validateBaseUrl(baseUrl)
             validatePsk(psk)
             validateServerPub(serverPub)
+            require(legacy || (!block.optBoolean("post_uplink", false) && !block.optBoolean("stream", false))) {
+                "$BLOCK_KEY: CDN поддерживает только GET с poll, не POST/stream"
+            }
             return YctunParams(
                 baseUrl = baseUrl,
+                userId = userId,
                 psk = psk,
                 serverPub = serverPub,
-                stream = block.optBoolean("stream", false),
-                streams = nonNegativeInt(block, "streams", 0),
-                workers = positiveInt(block, "workers", 1),
-                chunk = positiveInt(block, "chunk", 8192),
-                pollMs = positiveInt(block, "poll_ms", 5000),
-                postUplink = block.optBoolean("post_uplink", true)
+                stream = if (legacy) false else block.optBoolean("stream", false),
+                streams = if (legacy) 0 else nonNegativeInt(block, "streams", 0),
+                workers = if (legacy) 3 else positiveInt(block, "workers", 3),
+                chunk = if (legacy) 4096 else positiveInt(block, "chunk", 4096),
+                pollMs = if (legacy) 400 else positiveInt(block, "poll_ms", 400),
+                postUplink = if (legacy) false else block.optBoolean("post_uplink", false)
             )
         }
 
@@ -108,17 +132,20 @@ data class YctunParams(
             } catch (_: Exception) {
                 throw IllegalArgumentException("$BLOCK_KEY: base_url не URL")
             }
-            if (url.scheme != "https" || url.host.isNullOrBlank()) {
+            if (url.scheme != "https" || url.host != "dom.sa05.eu.cc" || url.port != -1 ||
+                url.userInfo != null || url.rawQuery != null || url.rawFragment != null ||
+                (url.path.isNotEmpty() && url.path != "/")
+            ) {
                 throw IllegalArgumentException(
-                    "$BLOCK_KEY: base_url должен быть https-адресом входа туннеля"
+                    "$BLOCK_KEY: base_url должен быть https://dom.sa05.eu.cc"
                 )
             }
         }
 
         private fun validatePsk(value: String) {
-            if (value.length < 32 || !value.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) {
+            if (value.length != 64 || !value.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) {
                 throw IllegalArgumentException(
-                    "$BLOCK_KEY: psk должен быть hex (минимум 16 байт)"
+                    "$BLOCK_KEY: psk должен быть hex (32 байта)"
                 )
             }
         }

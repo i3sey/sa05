@@ -1,15 +1,13 @@
-// relayd — серверная сторона туннеля. Работает как origin для Yandex Cloud CDN:
-// принимает GET-запросы краёв CDN, расшифровывает аплинк, мультиплексирует
-// потоки и ходит наружу (dial-out) с этого сервера.
+// relayd is an isolated HTTPS origin for the Yandex CDN, never the VPN :443.
 package main
 
 import (
-	"crypto/rand"
+	"crypto/hmac"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -20,91 +18,106 @@ import (
 )
 
 type Config struct {
-	Listen       string `json:"listen"`
-	KeyFile      string `json:"key_file"`
-	PSK          string `json:"psk"` // hex
-	Cover        string `json:"cover,omitempty"`
-	StreamTTLSec int    `json:"stream_ttl_sec,omitempty"`
-	IdleTTLSec   int    `json:"idle_ttl_sec,omitempty"`
+	Listen     string   `json:"listen"`
+	KeyFile    string   `json:"key_file"`
+	UsersFile  string   `json:"users_file"`
+	CertFile   string   `json:"cert_file"`
+	TLSKeyFile string   `json:"tls_key_file"`
+	DenyCIDRs  []string `json:"deny_cidrs"`
 }
 
-const defaultCover = `<!doctype html><html><head><meta charset="utf-8"><title>Status</title></head>
-<body style="font-family:sans-serif;max-width:640px;margin:3em auto;color:#333">
-<h1>Service status</h1><p>All systems operational.</p>
-<p style="color:#999;font-size:0.85em">Monitoring endpoint. No user-facing content here.</p>
-</body></html>`
-
 func main() {
-	configPath := flag.String("config", "/etc/yctun/relayd.json", "путь к конфигу")
-	genKey := flag.String("genkey", "", "сгенерировать статический ключ в файл и выйти")
+	configPath := flag.String("config", "/etc/yctun-cdn/relayd.json", "config path")
+	genKey := flag.String("genkey", "", "write new server private key and exit")
 	flag.Parse()
-
 	if *genKey != "" {
 		priv, pub, err := proto.GenStaticKey()
 		if err != nil {
 			log.Fatal(err)
 		}
-		if err := os.WriteFile(*genKey, []byte(hex.EncodeToString(priv[:])), 0o600); err != nil {
+		if err = os.WriteFile(*genKey, []byte(hex.EncodeToString(priv[:])), 0600); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("ключ записан в %s\n", *genKey)
-		fmt.Printf("pubkey:  %s\n", hex.EncodeToString(pub[:]))
-		fmt.Printf("pubhash: %s\n", proto.PubHash(pub[:]))
+		log.Printf("server_pub: %s", hex.EncodeToString(pub[:]))
 		return
 	}
-
-	cfg := Config{Listen: ":8081", KeyFile: "/etc/yctun/relayd.key"}
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
-		log.Fatalf("не удалось прочитать конфиг: %v", err)
+		log.Fatal(err)
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		log.Fatalf("плохой конфиг: %v", err)
+	var cfg Config
+	if err = json.Unmarshal(data, &cfg); err != nil {
+		log.Fatal(err)
 	}
-	if cfg.Listen == "" {
-		cfg.Listen = ":8081"
+	if cfg.Listen == "" || cfg.KeyFile == "" || cfg.UsersFile == "" || cfg.CertFile == "" || cfg.TLSKeyFile == "" {
+		log.Fatal("missing config")
 	}
-	if cfg.Cover == "" {
-		cfg.Cover = defaultCover
+	secret := os.Getenv("CDN_PILOT_ORIGIN_SECRET")
+	if len(secret) < 48 {
+		log.Fatal("missing CDN origin secret")
 	}
-
-	keyHex, err := os.ReadFile(cfg.KeyFile)
+	raw, err := os.ReadFile(cfg.KeyFile)
 	if err != nil {
-		log.Fatalf("нет ключа %s: %v (сначала: relayd -genkey %s)", cfg.KeyFile, err, cfg.KeyFile)
+		log.Fatal(err)
 	}
-	privBytes, err := hex.DecodeString(strings.TrimSpace(string(keyHex)))
-	if err != nil || len(privBytes) != 32 {
-		log.Fatalf("плохой ключ в %s", cfg.KeyFile)
+	key, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(key) != 32 {
+		log.Fatal("bad static key")
 	}
 	var priv [32]byte
-	copy(priv[:], privBytes)
+	copy(priv[:], key)
 	pub, err := proto.PubKey(priv)
 	if err != nil {
 		log.Fatal(err)
 	}
-	psk, err := hex.DecodeString(strings.TrimSpace(cfg.PSK))
-	if err != nil || len(psk) < 16 {
-		log.Fatal("psk должен быть hex-строкой (минимум 16 байт)")
+	raw, err = os.ReadFile(cfg.UsersFile)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	srv := chanhttp.NewServer(chanhttp.ServerCfg{
-		PSK:        psk,
-		StaticPriv: priv,
-		StaticPub:  pub,
-		CoverHTML:  cfg.Cover,
-		StreamTTL:  time.Duration(cfg.StreamTTLSec) * time.Second,
-		IdleTTL:    time.Duration(cfg.IdleTTLSec) * time.Second,
+	var hexUsers map[string]string
+	if err = json.Unmarshal(raw, &hexUsers); err != nil {
+		log.Fatal(err)
+	}
+	users := make(map[string][]byte)
+	for id, secretHex := range hexUsers {
+		if len(id) < 1 || len(id) > 48 || strings.ContainsAny(id, "/ .") {
+			log.Fatal("invalid user ID")
+		}
+		psk, err := hex.DecodeString(secretHex)
+		if err != nil || len(psk) != 32 {
+			log.Fatal("invalid user PSK")
+		}
+		users[id] = psk
+	}
+	if len(users) == 0 {
+		log.Fatal("no users")
+	}
+	if len(cfg.DenyCIDRs) == 0 {
+		log.Fatal("deny_cidrs required (include the origin/panel public IP)")
+	}
+	var denied []*net.IPNet
+	for _, cidr := range cfg.DenyCIDRs {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			log.Fatal("invalid deny_cidrs")
+		}
+		denied = append(denied, n)
+	}
+	relay := chanhttp.NewServer(chanhttp.ServerCfg{Users: users, StaticPriv: priv, StaticPub: pub, DenyCIDRs: denied})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The origin is reachable from the public Internet. Only CDN-inserted
+		// requests can reach either the probe or the authenticated tunnel handler.
+		if !hmac.Equal([]byte(r.Header.Get("X-CDN-Pilot-Secret")), []byte(secret)) {
+			http.Error(w, "cdn required", 403)
+			return
+		}
+		if r.URL.Path == "/probe" {
+			chanhttp.Probe(w, r)
+			return
+		}
+		relay.ServeHTTP(w, r)
 	})
-
-	log.Printf("relayd: слушаю %s", cfg.Listen)
-	log.Printf("relayd: pubhash %s", proto.PubHash(pub[:]))
-	s := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           srv,
-		ReadHeaderTimeout: 30 * time.Second,
-		IdleTimeout:       130 * time.Second,
-	}
-	log.Fatal(s.ListenAndServe())
+	srv := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 8 * time.Second, ReadTimeout: 25 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+	log.Printf("relayd CDN origin listening (pubhash=%s, users=%d)", proto.PubHash(pub[:]), len(users))
+	log.Fatal(srv.ListenAndServeTLS(cfg.CertFile, cfg.TLSKeyFile))
 }
-
-var _ = rand.Read

@@ -1,88 +1,25 @@
-# yctun — GET-туннель через Yandex Cloud CDN
+# yctun — изолированный GET-туннель через Yandex Cloud CDN
 
-Рабочий канал связи: SOCKS5 на клиенте → GET-запросы через CDN Яндекса →
-relayd на VPS → интернет с IP VPS. Без WebSocket, без POST, без заявок
-в поддержку — только GET, как обычный веб-трафик.
+SA05: TUN → Xray → SOCKS5 `relayc` → HTTPS `dom.sa05.eu.cc` → CDN → отдельный TLS origin `data.sa05.eu.cc:18443` на de2 → `relayd` → публичный интернет. Обычный VPN на de2:443, Remnawave и их конфиги не участвуют. Только TCP CONNECT; Xray переводит DNS в DoH, прочий UDP блокирует.
 
-## Архитектура
+## Текущее развёртывание (23.09.2026)
 
-```
-[приложение] → SOCKS5 127.0.0.1:1080 → relayc
-   → HTTPS GET /s/<sid>/... → Yandex Cloud CDN (домен dom.sa05.eu.cc)
-   → relayd (VPS :8081, origin CDN) → интернет (IP VPS)
-```
+- `cdn-pilot-origin.service` обслуживает `/probe` и `/s/*` через `/opt/cdn-pilot/relayd-cdn`; конфигурация и ключи только на сервере в `/etc/yctun-cdn/` (`0600`). Origin принимает **только GET** с секретным CDN-origin заголовком, блокирует прямое обращение (403), кэш запрещён. CDN проверяет TLS к origin. Не переносить секрет CDN-заголовка в клиент.
+- Клиент требует HTTPS на точном имени `dom.sa05.eu.cc`, проверяет сертификат и pin статического pubkey, не пользуется системным HTTP-прокси и не следует редиректам. URL-пути содержат AEAD-шифртекст, поэтому access-логи CDN не должны хранить полные URL.
+- Hello v2: HMAC(PSK, user ID + sid + эфемерный pubkey + timestamp + nonce) проверяется **до** выделения сессии; sid/user входят в HKDF. Два разных sid могут работать одновременно. Блокируются повтор и устаревший hello. Есть ограничения сессий, одновременных запросов, потоков, очереди poll-ответов и запрещённых адресов dial-out. При смене ключа требуется пересборка/перезапуск на обеих сторонах; формат v1 несовместим.
+- Действующий заголовок `X-Sa05-Yctun` на `sub.sa05.tech` до сих пор указывает на Cloud Functions и содержит общий PSK; новая версия SA05 переносит **только этот проверенный legacy-формат** на CDN и использует новый pubkey сервера, не редактируя подписки. Сейчас отзыв **отдельного** пользователя невозможен: общий PSK компрометируется вместе со всеми клиентами. Для выпуска индивидуальных ключей: выдавать `user_id`, `psk`, `server_pub`, `base_url` на каждого отдельно, добавить ID+ключ в `users.json`, перезапустить только этот сервис, затем обновить подписки соответствующих пользователей. Не копировать примеры JSON как рабочие ключи.
+- Работа через белые списки LTE в момент ограничения **не проверена**: успешные GET и SOCKS/HTTPS с другой сети не подтверждают, что оператор пропустит CDN edge или DNS.
 
-- **Крипто**: X25519 ECDH + HKDF-SHA256 + XChaCha20-Poly1305 (сквозная,
-  CDN видит только шум), реплей-защита, случайный паддинг.
-- **Mux**: потоки (каждый = TCP-соединение) с seq/ack, окнами 2МБ,
-  реордерингом и ретрансмитом после обрыва канала.
-- **Аплинк**: GET с фреймами в path (до ~49КБ URL, уникальный nonce),
-  6 параллельных воркеров, батчинг.
-- **Даунлинк**: 4 параллельных стримовых GET (chunked, хартбит каждые 2с,
-  батчинг до 256КБ, ротация каждые 2 мин); фолбэк — поллинг в телах
-  ответов аплинка (если стримы недоступны).
-- **Маскировка**: браузерные User-Agent, cover-страница на корне,
-  паддинг, no-store, ничего паттернового.
+## Сборка и проверка
 
-## Сборка
-
-```bash
-cd tunnel
-go build -o relayc ./cmd/relayc
-GOOS=linux GOARCH=amd64 go build -o relayd ./cmd/relayd
-# Windows-клиент: GOOS=windows GOARCH=amd64 go build -o relayc.exe ./cmd/relayc
+```sh
+(cd third_party/yctun && go test -race ./...)
+scripts/build-relayc-arm64.sh
+JAVA_HOME=/opt/android-studio/jbr ./gradlew :app:testDebugUnitTest assembleDebug
 ```
 
-## Сервер (VPS) — уже развёрнут
+Для клиента см. `deploy/relayc.example.json`; ключи приходят только по HTTPS-подписке, не хранятся в APK. Проверка: `curl --noproxy '' --socks5-hostname 127.0.0.1:1080 https://example.com/`. Порт origin публично открыт: HTTP 403 без заголовка — не IP ACL; при утечке статического CDN заголовка потребуется ротация и CDN/серверная фильтрация. Для входного сертификата CDN добавлена DNS-only CNAME `_acme-challenge.dom.sa05.eu.cc`; сертификат истекает 22.11.2026, перепроверить автообновление в Certificate Manager. Origin-сертификат истекает 22.12.2026: Certbot DNS-01 dry-run прошёл, но автоматическая передача нового cert/key на de2 и безопасный рестарт только пилотного сервиса **пока не настроены**. Продление и деплой обязательны до срока истечения; не менять действующий сертификат nginx/Reality. CDN тарифицируется, см. внутренний отчёт в `vpn stuff/CDN-YANDEX-INTERNAL.md` (приватный).
 
-- Бинарь: `/usr/local/bin/yctun-relayd`, сервис `yctun.service`
-- Конфиг: `/etc/yctun/relayd.json`, ключ `/etc/yctun/relayd.key`
-- Управление: `systemctl restart yctun`, логи: `journalctl -u yctun -f`
-- Первичная генерация ключа: `yctun-relayd -genkey /etc/yctun/relayd.key`
+## Откат только пилота
 
-## Клиент
-
-`relayc.json`:
-```json
-{
-  "base_url": "https://dom.sa05.eu.cc",
-  "psk": "<hex32 из /etc/yctun/relayd.json>",
-  "server_pub": "<hex64: pubkey сервера>",
-  "listen": "127.0.0.1:1080",
-  "stream": true,
-  "streams": 4,
-  "workers": 6,
-  "chunk": 12288,
-  "poll_ms": 400
-}
-```
-
-Запуск: `./relayc -config relayc.json`
-Использование: любой SOCKS5-клиент на 127.0.0.1:1080
-(`curl --socks5-hostname 127.0.0.1:1080 https://ifconfig.me`
-должен показать IP VPS).
-
-## Замеры (через CDN, из песочницы с прокси)
-
-- Выход в интернет с IP VPS: ✓ (ifconfig.me → 191.44.112.83)
-- example.com 30/30 подряд ✓
-- Скачивание: ~350-400 КБ/с через прокси песочницы (потолок среды;
-  на прямой машине ожидаемо выше — 4 стрима + крупные батчи)
-
-## Тюнинг
-
-| Параметр | Что делает |
-|---|---|
-| `streams` | число параллельных стримов даунлинка (1-8) |
-| `workers` | параллельных аплинк-запросов |
-| `chunk` | байт аплинка на GET (макс ~36000, лимит URL 49КБ) |
-| `poll_ms` | интервал heartbeat при простое |
-
-## Файлы
-
-- `cmd/relayd` — сервер (origin для CDN)
-- `cmd/relayc` — клиент (SOCKS5)
-- `internal/proto` — крипто + wire-формат
-- `internal/session` — mux потоков
-- `internal/chanhttp` — HTTP-транспорт (uplink/стрим/poll)
-- `internal/socks5` — SOCKS5-сервер
+На de2: `/etc/yctun-cdn/cdn-pilot-origin.service.rollback` — копия прежнего unit, `/opt/cdn-pilot/origin.py` сохранён. Для отката pilot origin остановить только `cdn-pilot-origin.service`, восстановить unit из backup, `systemctl daemon-reload && systemctl start cdn-pilot-origin`, затем проверить `/probe` через CDN и прямой 403. Обычные VPN-службы не перезапускать. Старые клиенты после такого отката перестанут использовать БС-туннель, но обычный VPN останется доступен.

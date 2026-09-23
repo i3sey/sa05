@@ -9,6 +9,8 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,6 +19,7 @@ type Opener func(ctx context.Context, addr string) (net.Conn, error)
 type Server struct {
 	Listen string
 	Open   Opener
+	failed atomic.Uint32
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -58,7 +61,18 @@ func (s *Server) handle(conn net.Conn) {
 	cancel()
 	if err != nil {
 		replyErr(conn, 0x05)
-		log.Printf("socks5: connect %s: %v", addr, err)
+		if s.failed.Add(1) <= 30 {
+			reason := "other"
+			switch {
+			case strings.Contains(err.Error(), "stream limit"):
+				reason = "stream limit"
+			case strings.Contains(err.Error(), "connect failed"):
+				reason = "remote dial failed"
+			case strings.Contains(err.Error(), "deadline exceeded"):
+				reason = "timeout"
+			}
+			log.Printf("socks5: connect failed: %s (destination omitted)", reason)
+		}
 		return
 	}
 	defer remote.Close()

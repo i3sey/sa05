@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -72,8 +71,7 @@ func NewClient(base *url.URL, sid string, sealer *proto.Sealer, opener *proto.Op
 		cfg.Timeout = 20 * time.Second
 	}
 	tr := &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		TLSClientConfig:     &tls.Config{},
+		Proxy:               nil, // CDN only; never inherit HTTP(S)_PROXY
 		ForceAttemptHTTP2:   true,
 		DisableCompression:  true,
 		MaxIdleConnsPerHost: 64,
@@ -89,8 +87,8 @@ func NewClient(base *url.URL, sid string, sealer *proto.Sealer, opener *proto.Op
 		sealer:   sealer,
 		opener:   opener,
 		cfg:      cfg,
-		hc:       &http.Client{Transport: tr, Timeout: cfg.Timeout + 10*time.Second},
-		streamHC: &http.Client{Transport: tr}, // без Timeout: стрим живёт долго
+		hc:       &http.Client{Transport: tr, Timeout: cfg.Timeout + 10*time.Second, CheckRedirect: RejectRedirect},
+		streamHC: &http.Client{Transport: tr, CheckRedirect: RejectRedirect},
 		sendCh:   make(chan []byte, 2048),
 		onRecv:   onRecv,
 		stopCh:   make(chan struct{}),
@@ -127,6 +125,9 @@ func (c *Client) Stop() {
 	}
 	<-c.doneCh
 }
+
+// RejectRedirect prevents a CDN response from sending secrets to another host.
+func RejectRedirect(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 
 func nonceHex() string {
 	b := make([]byte, 8)
@@ -166,24 +167,31 @@ func (c *Client) workerLoop() {
 		if len(batch) > 0 {
 			body = concatSealed(batch)
 		}
-		respBody, err := c.roundTrip(ua, body)
-		if err != nil {
-			// ретраи того же батча
-			backoff := 150 * time.Millisecond
-			for attempt := 0; attempt < 3 && err != nil; attempt++ {
-				select {
-				case <-c.stopCh:
-					return
-				case <-time.After(backoff):
+		backoff := 150 * time.Millisecond
+		failed := false
+		for {
+			respBody, err := c.roundTrip(ua, body)
+			if err == nil {
+				c.parseFrames(respBody)
+				if failed && c.OnReconnect != nil {
+					go c.OnReconnect()
 				}
-				respBody, err = c.roundTrip(ua, body)
+				break
+			}
+			if !failed {
+				log.Print("yctun: uplink unavailable (URL and encrypted payload omitted)")
+			}
+			failed = true
+			// Never discard an encrypted batch after a transient CDN failure.
+			select {
+			case <-c.stopCh:
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 5*time.Second {
 				backoff *= 2
 			}
-			if err != nil {
-				log.Printf("yctun: uplink GET failed: %v", err)
-			}
 		}
-		c.parseFrames(respBody)
 
 		if len(batch) == 0 {
 			select {
@@ -211,7 +219,7 @@ func (c *Client) roundTrip(ua string, body []byte) ([]byte, error) {
 	reqURL, hdrPath := tunnelRequestURL(c.base, p)
 	req, err := http.NewRequest(method, reqURL, reqBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid tunnel request")
 	}
 	if hdrPath != "" {
 		req.Header.Set("X-Yctun-Path", hdrPath)
@@ -221,7 +229,7 @@ func (c *Client) roundTrip(ua string, body []byte) ([]byte, error) {
 	req.Header.Set("Accept", "*/*")
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("CDN HTTPS request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 && resp.StatusCode != 204 {
@@ -243,7 +251,7 @@ func (c *Client) streamLoop() {
 		}
 		err := c.streamOnce(ua)
 		if err != nil {
-			log.Printf("yctun: downlink stream: %v", err)
+			log.Print("yctun: downlink stream unavailable")
 			if c.OnReconnect != nil {
 				c.OnReconnect()
 			}
@@ -283,7 +291,7 @@ func (c *Client) streamOnce(ua string) error {
 	req = req.WithContext(ctx)
 	resp, err := c.streamHC.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("CDN HTTPS request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {

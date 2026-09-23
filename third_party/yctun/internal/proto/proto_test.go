@@ -2,6 +2,7 @@ package proto
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 )
 
@@ -40,6 +41,28 @@ func TestReplayDropped(t *testing.T) {
 	}
 	if _, err := o.Open(f); err == nil {
 		t.Fatal("replay прошёл — это дыра")
+	}
+}
+
+func TestConcurrentReplayOnlyOneAccepted(t *testing.T) {
+	key := make([]byte, 32)
+	sealer, _ := NewSealer(key)
+	opener, _ := NewOpener(key)
+	frame := sealer.Seal([]byte("data"))
+	var wg sync.WaitGroup
+	wins := make(chan struct{}, 32)
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := opener.Open(frame); err == nil {
+				wins <- struct{}{}
+			}
+		}()
+	}
+	wg.Wait()
+	if len(wins) != 1 {
+		t.Fatalf("concurrent duplicate accepted %d times", len(wins))
 	}
 }
 
