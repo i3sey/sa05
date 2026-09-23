@@ -82,6 +82,8 @@ object XrayPreferences {
     private const val KEY_BS_TRAFFIC_BONUS = "bs_traffic_bonus"
     private const val KEY_BS_TRAFFIC_CODES = "bs_traffic_codes"
     private const val MAX_NETWORK_CACHE_ENTRIES = 16
+    @Volatile
+    internal var cachedSettings: XraySettings? = null
 
     internal val defaultConfig = """
         {
@@ -174,11 +176,14 @@ object XrayPreferences {
             .catch { error ->
                 if (error is IOException) emit(emptyPreferences()) else throw error
             }
-            .map(::decodeSettings)
+            .map { prefs ->
+                decodeSettings(prefs).also { cachedSettings = it }
+            }
             .flowOn(Dispatchers.Default)
             .distinctUntilChanged()
 
-    internal suspend fun snapshot(context: Context): XraySettings = settings(context).first()
+    internal suspend fun snapshot(context: Context): XraySettings =
+        settings(context).first().also { cachedSettings = it }
 
     suspend fun saveConfig(context: Context, value: String) {
         dataStore(context).edit { it[configKey] = value }

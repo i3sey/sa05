@@ -1264,7 +1264,7 @@ class XrayVpnService : VpnService() {
         _socksPort.value = null
         _zapretAutoProgress.value = ZapretAutoProgress()
         verificationMessage = ""
-        VpnRuntimeState.clearIfBackend(this, runningBackend)
+        VpnRuntimeState.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -1385,8 +1385,8 @@ class XrayVpnService : VpnService() {
         verificationMessage = ""
         val runtime = VpnRuntimeState.read(this)
         if (explicitStop) {
-            VpnRuntimeState.clearIfBackend(this, runningBackend)
-        } else if (runtime.status != VpnRunStatus.ERROR) {
+            VpnRuntimeState.clear(this)
+        } else if (runtime.status != VpnRunStatus.ERROR && runtime.status != VpnRunStatus.DISCONNECTED) {
             VpnRuntimeState.publish(
                 this,
                 runtime.copy(
