@@ -72,6 +72,67 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
+    fun refreshKeepsBsTunnelWhenProviderListHasNoSuchId() {
+        val downloaded = SubscriptionRepository.parseProfiles(
+            "[${profile("Германия")},${profile("Финляндия", "two.example")}]"
+        )
+
+        assertEquals(
+            BsProfile.ID,
+            SubscriptionRepository.resolveRefreshedActiveProfileId(
+                sameSubscription = true,
+                activeProfileId = BsProfile.ID,
+                activeRemarks = BsProfile.REMARKS,
+                downloaded = downloaded
+            )
+        )
+        assertEquals(
+            BsProfile.LEGACY_ID,
+            SubscriptionRepository.resolveRefreshedActiveProfileId(
+                sameSubscription = true,
+                activeProfileId = BsProfile.LEGACY_ID,
+                activeRemarks = BsProfile.REMARKS,
+                downloaded = downloaded
+            )
+        )
+    }
+
+    @Test
+    fun refreshKeepsProviderProfileOrFallsBackByRemarks() {
+        val downloaded = SubscriptionRepository.parseProfiles(
+            "[${profile("Германия")},${profile("Финляндия", "two.example")}]"
+        )
+
+        assertEquals(
+            downloaded[1].id,
+            SubscriptionRepository.resolveRefreshedActiveProfileId(
+                sameSubscription = true,
+                activeProfileId = downloaded[1].id,
+                activeRemarks = "Финляндия",
+                downloaded = downloaded
+            )
+        )
+        assertEquals(
+            downloaded[0].id,
+            SubscriptionRepository.resolveRefreshedActiveProfileId(
+                sameSubscription = true,
+                activeProfileId = "removed",
+                activeRemarks = "Германия",
+                downloaded = downloaded
+            )
+        )
+        assertEquals(
+            downloaded[0].id,
+            SubscriptionRepository.resolveRefreshedActiveProfileId(
+                sameSubscription = false,
+                activeProfileId = BsProfile.ID,
+                activeRemarks = BsProfile.REMARKS,
+                downloaded = downloaded
+            )
+        )
+    }
+
+    @Test
     fun parsesOnlyBypassPackageNames() {
         val result = SubscriptionRepository.parseBypassHeader(
             "bypass",

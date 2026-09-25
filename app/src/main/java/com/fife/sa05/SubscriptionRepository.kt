@@ -82,6 +82,29 @@ class SubscriptionRepository(private val context: Context) {
                 .toSet()
         }
 
+        /**
+         * Какой профиль остаётся выбранным после ответа подписки.
+         * Список провайдера не содержит псевдо-сервер «БС-туннель», поэтому его
+         * id сохраняется отдельно и не сбрасывается на первый обычный профиль.
+         */
+        internal fun resolveRefreshedActiveProfileId(
+            sameSubscription: Boolean,
+            activeProfileId: String,
+            activeRemarks: String?,
+            downloaded: List<SubscriptionProfile>
+        ): String {
+            if (!sameSubscription) return downloaded.first().id
+            if (activeProfileId == BsProfile.ID || activeProfileId == BsProfile.LEGACY_ID) {
+                return activeProfileId
+            }
+            if (downloaded.any { it.id == activeProfileId }) return activeProfileId
+            if (!activeRemarks.isNullOrBlank()) {
+                return downloaded.firstOrNull { it.remarks == activeRemarks }?.id
+                    ?: downloaded.first().id
+            }
+            return downloaded.first().id
+        }
+
         internal fun decodeYctunHeader(value: String?): String {
             if (value.isNullOrBlank()) return ""
             val encoded = value.trim().substringAfter("base64:", missingDelimiterValue = "")
@@ -117,14 +140,17 @@ class SubscriptionRepository(private val context: Context) {
             next
         }
 
-    suspend fun update(inputUrl: String): SubscriptionUpdateResult =
-        SubscriptionMutationLock.mutex.withLock {
-            updateLocked(inputUrl)
-        }
-
-    private suspend fun updateLocked(inputUrl: String): SubscriptionUpdateResult {
+    suspend fun update(inputUrl: String): SubscriptionUpdateResult {
         val normalizedUrl = validateUrl(inputUrl)
-        val previous = load()
+        val baseline = load()
+        val fetched = fetch(normalizedUrl, baseline)
+        val downloaded = fetched.body?.let { parseProfiles(it) }
+        return SubscriptionMutationLock.mutex.withLock {
+            commit(normalizedUrl, baseline, fetched, downloaded)
+        }
+    }
+
+    private fun fetch(normalizedUrl: String, baseline: SubscriptionState): FetchedSubscription {
         val connection = (URL(normalizedUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = TIMEOUT_MS
             readTimeout = TIMEOUT_MS
@@ -132,44 +158,31 @@ class SubscriptionRepository(private val context: Context) {
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "SA05-Xray/1.0")
-            if (previous.url == normalizedUrl && previous.etag.isNotBlank()) {
-                setRequestProperty("If-None-Match", previous.etag)
+            if (baseline.url == normalizedUrl && baseline.etag.isNotBlank()) {
+                setRequestProperty("If-None-Match", baseline.etag)
             }
         }
         try {
             val status = connection.responseCode
+            val headers = FetchedHeaders(
+                title = decodeBase64Header(connection.getHeaderField("profile-title")),
+                userInfo = connection.getHeaderField("subscription-userinfo").orEmpty(),
+                updateIntervalHours = connection
+                    .getHeaderField("profile-update-interval")
+                    ?.trim()
+                    ?.toIntOrNull(),
+                suggestedBypassApps = parseBypassHeader(
+                    connection.getHeaderField("per-app-proxy-mode"),
+                    connection.getHeaderField("per-app-proxy-list")
+                ),
+                yctunJson = decodeYctunHeader(connection.getHeaderField("x-sa05-yctun")),
+                etag = connection.getHeaderField("ETag").orEmpty()
+            )
             if (status == HttpURLConnection.HTTP_NOT_MODIFIED &&
-                previous.url == normalizedUrl &&
-                previous.profiles.isNotEmpty()
+                baseline.url == normalizedUrl &&
+                baseline.profiles.isNotEmpty()
             ) {
-                // 304 приходит со свежими заголовками: обновляем производные
-                // поля (включая x-sa05-yctun), не перекачивая тело.
-                val refreshed = previous.copy(
-                    title = decodeBase64Header(connection.getHeaderField("profile-title"))
-                        .ifBlank { previous.title },
-                    userInfo =
-                        connection.getHeaderField("subscription-userinfo").orEmpty()
-                            .ifBlank { previous.userInfo },
-                    updateIntervalHours = connection
-                        .getHeaderField("profile-update-interval")
-                        ?.trim()
-                        ?.toIntOrNull()
-                        ?: previous.updateIntervalHours,
-                    suggestedBypassApps =
-                        parseBypassHeader(
-                            connection.getHeaderField("per-app-proxy-mode"),
-                            connection.getHeaderField("per-app-proxy-list")
-                        ).ifEmpty { previous.suggestedBypassApps },
-                    yctunJson = decodeYctunHeader(
-                        connection.getHeaderField("x-sa05-yctun")
-                    ).ifBlank { previous.yctunJson }
-                ).withBsProfile()
-                if (!subscriptionMetadataChanged(previous, refreshed)) {
-                    return SubscriptionUpdateResult.NotModified(previous)
-                }
-                val saved = refreshed.copy(updatedAt = System.currentTimeMillis())
-                XrayPreferences.saveSubscription(context, saved)
-                return SubscriptionUpdateResult.NotModified(saved)
+                return FetchedSubscription(notModified = true, headers = headers, body = null)
             }
             if (status !in 200..299) {
                 throw IllegalArgumentException("Сервер подписки вернул HTTP $status")
@@ -189,42 +202,84 @@ class SubscriptionRepository(private val context: Context) {
                 }
                 output.toString(Charsets.UTF_8.name())
             }
-            val profiles = parseProfiles(body)
-            val previousActive = previous.activeProfile
-            val activeId = when {
-                previous.url != normalizedUrl -> profiles.first().id
-                profiles.any { it.id == previous.activeProfileId } -> previous.activeProfileId
-                previousActive != null -> profiles.firstOrNull {
-                    it.remarks == previousActive.remarks
-                }?.id ?: profiles.first().id
-                else -> profiles.first().id
-            }
-            val next = SubscriptionState(
-                url = normalizedUrl,
-                title = decodeBase64Header(connection.getHeaderField("profile-title")),
-                profiles = profiles,
-                activeProfileId = activeId,
-                updatedAt = System.currentTimeMillis(),
-                etag = connection.getHeaderField("ETag").orEmpty(),
-                userInfo = connection.getHeaderField("subscription-userinfo").orEmpty(),
-                updateIntervalHours = connection
-                    .getHeaderField("profile-update-interval")
-                    ?.trim()
-                    ?.toIntOrNull(),
-                suggestedBypassApps = parseBypassHeader(
-                    connection.getHeaderField("per-app-proxy-mode"),
-                    connection.getHeaderField("per-app-proxy-list")
-                ),
-                yctunJson = decodeYctunHeader(
-                    connection.getHeaderField("x-sa05-yctun")
-                )
-            ).withBsProfile()
-            XrayPreferences.saveSubscription(context, next)
-            return SubscriptionUpdateResult.Updated(next)
+            return FetchedSubscription(notModified = false, headers = headers, body = body)
         } finally {
             connection.disconnect()
         }
     }
+
+    private suspend fun commit(
+        normalizedUrl: String,
+        baseline: SubscriptionState,
+        fetched: FetchedSubscription,
+        downloaded: List<SubscriptionProfile>?
+    ): SubscriptionUpdateResult {
+        val current = load()
+        if (current.url.isNotBlank() && current.url != normalizedUrl) {
+            return SubscriptionUpdateResult.NotModified(current)
+        }
+        if (fetched.notModified) {
+            // Более новый ответ уже записан, пока этот 304 ждал сеть.
+            if (current.etag.isNotBlank() && current.etag != baseline.etag) {
+                return SubscriptionUpdateResult.NotModified(current)
+            }
+            val headers = fetched.headers
+            // 304 приходит со свежими заголовками: обновляем производные
+            // поля (включая x-sa05-yctun), не перекачивая тело.
+            val refreshed = current.copy(
+                title = headers.title.ifBlank { current.title },
+                userInfo = headers.userInfo.ifBlank { current.userInfo },
+                updateIntervalHours = headers.updateIntervalHours ?: current.updateIntervalHours,
+                suggestedBypassApps = headers.suggestedBypassApps.ifEmpty {
+                    current.suggestedBypassApps
+                },
+                yctunJson = headers.yctunJson.ifBlank { current.yctunJson }
+            ).withBsProfile()
+            if (!subscriptionMetadataChanged(current, refreshed)) {
+                return SubscriptionUpdateResult.NotModified(current)
+            }
+            val saved = refreshed.copy(updatedAt = System.currentTimeMillis())
+            XrayPreferences.saveSubscription(context, saved)
+            return SubscriptionUpdateResult.NotModified(saved)
+        }
+        val profiles = checkNotNull(downloaded)
+        val activeId = resolveRefreshedActiveProfileId(
+            sameSubscription = current.url == normalizedUrl,
+            activeProfileId = current.activeProfileId,
+            activeRemarks = current.activeProfile?.remarks,
+            downloaded = profiles
+        )
+        val headers = fetched.headers
+        val next = SubscriptionState(
+            url = normalizedUrl,
+            title = headers.title,
+            profiles = profiles,
+            activeProfileId = activeId,
+            updatedAt = System.currentTimeMillis(),
+            etag = headers.etag,
+            userInfo = headers.userInfo,
+            updateIntervalHours = headers.updateIntervalHours,
+            suggestedBypassApps = headers.suggestedBypassApps,
+            yctunJson = headers.yctunJson
+        ).withBsProfile()
+        XrayPreferences.saveSubscription(context, next)
+        return SubscriptionUpdateResult.Updated(next)
+    }
+
+    private data class FetchedHeaders(
+        val title: String,
+        val userInfo: String,
+        val updateIntervalHours: Int?,
+        val suggestedBypassApps: Set<String>,
+        val yctunJson: String,
+        val etag: String
+    )
+
+    private data class FetchedSubscription(
+        val notModified: Boolean,
+        val headers: FetchedHeaders,
+        val body: String?
+    )
 
     private fun subscriptionMetadataChanged(
         previous: SubscriptionState,
