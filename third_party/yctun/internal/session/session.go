@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"yctun/internal/proto"
 )
@@ -19,7 +20,7 @@ const (
 	MaxRecvBuf = 2 << 20 // окно приёма (рекламируемое)
 	MaxSendBuf = 4 << 20 // предел локальной буферизации на отправку
 	DataChunk  = 8 << 10 // макс. payload DATA-фрейма
-	MaxStreams = 128     // макс. одновременных стримов на сессию
+	MaxStreams = 512     // макс. одновременных стримов на сессию
 )
 
 const (
@@ -56,10 +57,23 @@ type Stream struct {
 	recvNext     uint32
 	finRecv      bool
 	finSent      bool
+
+	lastAckWin   uint32
+	lastActivity time.Time
+	lastAckTime  time.Time
 }
 
 func newStream(sess *Session, id uint32) *Stream {
-	s := &Stream{id: id, sess: sess, state: stOpening, reorder: map[uint32][]byte{}}
+	now := time.Now()
+	s := &Stream{
+		id:           id,
+		sess:         sess,
+		state:        stOpening,
+		reorder:      map[uint32][]byte{},
+		lastAckWin:   MaxRecvBuf,
+		lastActivity: now,
+		lastAckTime:  now,
+	}
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
@@ -127,6 +141,7 @@ func (s *Stream) write(data []byte, out chan<- proto.Frame) error {
 		s.pend = append(s.pend, pending{seq: seq, data: chunk})
 		s.inFlight += int64(len(chunk))
 		win := s.freeWinLocked()
+		s.lastActivity = time.Now()
 		s.mu.Unlock()
 		out <- proto.Frame{Stream: s.id, Type: proto.TypeData, Seq: seq, Win: win, Data: chunk}
 		data = data[n:]
@@ -155,6 +170,7 @@ func (s *Stream) freeWinLocked() uint32 {
 // deliverData — входящий DATA: реордеринг, доставка, (вызов из HandleFrame).
 func (s *Stream) deliverData(seq uint32, data []byte) {
 	s.mu.Lock()
+	s.lastActivity = time.Now()
 	if seq < s.recvNext {
 		s.mu.Unlock() // дубль — ACK всё равно уйдёт
 		return
@@ -190,12 +206,17 @@ func (s *Stream) ackState() (uint32, uint32) {
 	if s.recvNext > 0 {
 		seq = s.recvNext - 1
 	}
-	return seq, s.freeWinLocked()
+	win := s.freeWinLocked()
+	s.lastAckWin = win
+	return seq, win
 }
 
 // applyAck — обработка ACK от пира.
 func (s *Stream) applyAck(seq uint32, win uint32) {
 	s.mu.Lock()
+	now := time.Now()
+	s.lastAckTime = now
+	s.lastActivity = now
 	kept := s.pend[:0]
 	for _, p := range s.pend {
 		if seq == ^uint32(0) || p.seq > seq {
@@ -232,6 +253,23 @@ func (s *Stream) read(b []byte) (int, bool) {
 	if len(s.recvBuf) > 0 {
 		n := copy(b, s.recvBuf)
 		s.recvBuf = s.recvBuf[n:]
+		s.lastActivity = time.Now()
+		win := s.freeWinLocked()
+		// If window opened up significantly, send an immediate window update ACK
+		if (s.lastAckWin < MaxRecvBuf/2 && win >= MaxRecvBuf/2) || (s.lastAckWin == 0 && win > 0) || (win > s.lastAckWin && win-s.lastAckWin >= 512*1024) {
+			s.lastAckWin = win
+			if s.state != stClosed && !s.finSent {
+				seq := ^uint32(0)
+				if s.recvNext > 0 {
+					seq = s.recvNext - 1
+				}
+				f := proto.Frame{Stream: s.id, Type: proto.TypeAck, Seq: seq, Win: win}
+				select {
+				case s.sess.outCh <- f:
+				default:
+				}
+			}
+		}
 		return n, false
 	}
 	return 0, true
@@ -269,6 +307,7 @@ type Session struct {
 	serverPending map[uint32]struct{}
 	conns         map[uint32]net.Conn
 	closed        bool
+	done          chan struct{}
 }
 
 type OpenResult struct {
@@ -277,14 +316,17 @@ type OpenResult struct {
 }
 
 func New(onOpen func(string) (net.Conn, error)) *Session {
-	return &Session{
+	s := &Session{
 		streams:       map[uint32]*Stream{},
-		outCh:         make(chan proto.Frame, 256),
+		outCh:         make(chan proto.Frame, 4096),
 		onOpen:        onOpen,
 		opening:       map[uint32]chan error{},
 		serverPending: map[uint32]struct{}{},
 		conns:         map[uint32]net.Conn{},
+		done:          make(chan struct{}),
 	}
+	go s.maintenanceLoop()
+	return s
 }
 
 func (s *Session) Out() <-chan proto.Frame { return s.outCh }
@@ -296,6 +338,7 @@ func (s *Session) Close() {
 		return
 	}
 	s.closed = true
+	close(s.done)
 	for id, st := range s.streams {
 		st.mu.Lock()
 		st.closeLocked(ErrClosed)
@@ -314,6 +357,59 @@ func (s *Session) Close() {
 		delete(s.opening, id)
 	}
 	s.mu.Unlock()
+}
+
+func (s *Session) maintenanceLoop() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case now := <-ticker.C:
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			var deadStreams []*Stream
+			var resendStreams []*Stream
+			for _, st := range s.streams {
+				st.mu.Lock()
+				// 1. Idle cleanup: remove stream dead for > 90s to prevent stream limit exhaustion
+				if now.Sub(st.lastActivity) > 90*time.Second {
+					deadStreams = append(deadStreams, st)
+				} else {
+					// 2. RTO: if unacknowledged data in flight without ACK for >= 2s, retransmit
+					if st.inFlight > 0 && now.Sub(st.lastAckTime) >= 2*time.Second {
+						resendStreams = append(resendStreams, st)
+					}
+					// 3. Wake up writer if stuck waiting for window
+					if st.peerWin <= 0 || st.inFlight >= st.peerWin {
+						st.cond.Broadcast()
+					}
+				}
+				st.mu.Unlock()
+			}
+			s.mu.Unlock()
+
+			for _, st := range deadStreams {
+				st.mu.Lock()
+				st.closeLocked(ErrClosed)
+				st.mu.Unlock()
+				s.remove(st.id)
+			}
+
+			for _, st := range resendStreams {
+				for _, f := range st.resend() {
+					select {
+					case s.outCh <- f:
+					default:
+					}
+				}
+			}
+		}
+	}
 }
 
 // Open — клиентская сторона: открыть стрим к addr (host:port).
@@ -451,12 +547,18 @@ func (s *Session) HandleFrame(f proto.Frame) {
 		st := s.streams[f.Stream]
 		s.mu.Unlock()
 		if st == nil {
-			s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeRst}
+			select {
+			case s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeRst}:
+			default:
+			}
 			return
 		}
 		st.deliverData(f.Seq, f.Data)
 		ackSeq, ackWin := st.ackState()
-		s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeAck, Seq: ackSeq, Win: ackWin}
+		select {
+		case s.outCh <- proto.Frame{Stream: f.Stream, Type: proto.TypeAck, Seq: ackSeq, Win: ackWin}:
+		default:
+		}
 
 	case proto.TypeAck:
 		s.mu.Lock()
@@ -505,40 +607,51 @@ func (s *Session) Resend() {
 func (s *Session) runPumps(st *Stream, conn net.Conn) {
 	var pumps sync.WaitGroup
 	pumps.Add(2)
-	go func() { pumps.Wait(); s.remove(st.id) }()
+	go func() {
+		pumps.Wait()
+		s.remove(st.id)
+	}()
 	// app -> сеть
 	go func() {
-		defer pumps.Done()
+		defer func() {
+			conn.Close()
+			st.mu.Lock()
+			st.closeLocked(io.EOF)
+			st.mu.Unlock()
+			pumps.Done()
+		}()
 		buf := make([]byte, 32<<10)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
 				if werr := st.write(buf[:n], s.outCh); werr != nil {
-					conn.Close()
 					return
 				}
 			}
 			if err != nil {
 				st.sendFin(s.outCh)
-				conn.Close()
 				return
 			}
 		}
 	}()
 	// сеть -> app
 	go func() {
-		defer pumps.Done()
+		defer func() {
+			conn.Close()
+			st.mu.Lock()
+			st.closeLocked(io.EOF)
+			st.mu.Unlock()
+			pumps.Done()
+		}()
 		buf := make([]byte, 32<<10)
 		for {
 			n, eof := st.read(buf)
 			if n > 0 {
 				if _, err := conn.Write(buf[:n]); err != nil {
-					conn.Close()
 					return
 				}
 			}
 			if eof {
-				conn.Close()
 				return
 			}
 		}

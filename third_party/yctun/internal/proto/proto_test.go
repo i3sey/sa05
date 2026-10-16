@@ -6,6 +6,34 @@ import (
 	"testing"
 )
 
+func TestSlidingWindowHighVolume(t *testing.T) {
+	key := make([]byte, 32)
+	s, err := NewSealer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := NewOpener(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate 150,000 frames (typical of ~100MB traffic)
+	for i := 0; i < 150000; i++ {
+		payload := []byte("packet data")
+		frame := s.Seal(payload)
+		got, err := o.Open(frame)
+		if err != nil {
+			t.Fatalf("frame %d rejected: %v", i, err)
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("frame %d payload mismatch", i)
+		}
+		// Duplicate must be rejected
+		if _, err := o.Open(frame); err == nil {
+			t.Fatalf("duplicate frame %d was accepted", i)
+		}
+	}
+}
+
 func TestSealOpenRoundtrip(t *testing.T) {
 	key := make([]byte, 32)
 	for i := range key {

@@ -153,7 +153,7 @@ func randPad() int {
 type Opener struct {
 	mu     sync.Mutex
 	aead   cipher.AEAD
-	seen   map[uint64]struct{}
+	bitmap [1024]uint64
 	max    uint64
 	maxSet bool
 }
@@ -163,7 +163,7 @@ func NewOpener(key []byte) (*Opener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Opener{aead: c, seen: map[uint64]struct{}{}}, nil
+	return &Opener{aead: c}, nil
 }
 
 const replayWindow = 65536
@@ -184,7 +184,9 @@ func (o *Opener) Open(frame []byte) ([]byte, error) {
 		if o.max-seq >= replayWindow {
 			return nil, ErrTooOld
 		}
-		if _, dup := o.seen[seq]; dup {
+		word := (seq / 64) % 1024
+		bit := uint64(1) << (seq % 64)
+		if (o.bitmap[word] & bit) != 0 {
 			return nil, ErrTooOld
 		}
 	}
@@ -205,21 +207,30 @@ func (o *Opener) Open(frame []byte) ([]byte, error) {
 
 // remember is called with o.mu held.
 func (o *Opener) remember(seq uint64) {
-	o.maxSet = true
-	if seq > o.max {
+	if !o.maxSet {
 		o.max = seq
+		o.maxSet = true
+		o.bitmap[(seq/64)%1024] = 1 << (seq % 64)
+		return
 	}
-	if len(o.seen) > replayWindow*2 {
-		// сброс: всё, что младше max-window, больше не придёт (или будет отброшено)
-		nw := map[uint64]struct{}{}
-		for s := range o.seen {
-			if o.max-s < replayWindow {
-				nw[s] = struct{}{}
+	if seq > o.max {
+		diff := seq - o.max
+		if diff >= replayWindow {
+			o.bitmap = [1024]uint64{}
+		} else {
+			oldWord := o.max / 64
+			newWord := seq / 64
+			for w := oldWord + 1; w <= newWord; w++ {
+				o.bitmap[w%1024] = 0
 			}
 		}
-		o.seen = nw
+		o.max = seq
+		o.bitmap[(seq/64)%1024] |= 1 << (seq % 64)
+	} else {
+		word := (seq / 64) % 1024
+		bit := uint64(1) << (seq % 64)
+		o.bitmap[word] |= bit
 	}
-	o.seen[seq] = struct{}{}
 }
 
 // NextFrameLen парсит заголовок фрейма из потока байт.

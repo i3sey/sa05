@@ -251,9 +251,17 @@ func (s *Server) handleUplink(w http.ResponseWriter, r *http.Request, sid string
 		return
 	default:
 	}
+
+	// 1. Drain pending pollBuf and wake dispatchLoop FIRST so outCh never deadlocks
 	st.mu.Lock()
 	st.lastSeen = time.Now()
+	buf := st.pollBuf
+	st.pollBuf = nil
+	st.pollBytes = 0
 	st.mu.Unlock()
+	st.signal()
+
+	// 2. Process incoming uplink payload if present
 	if len(parts) == 3 {
 		payload, err := base64.RawURLEncoding.DecodeString(parts[2])
 		if err != nil || len(payload) > 11000 {
@@ -274,12 +282,17 @@ func (s *Server) handleUplink(w http.ResponseWriter, r *http.Request, sid string
 			payload = payload[total:]
 		}
 	}
+
+	// 3. Collect any additional frames generated while processing uplink
 	st.mu.Lock()
-	buf := st.pollBuf
-	st.pollBuf = nil
-	st.pollBytes = 0
+	if len(st.pollBuf) > 0 {
+		buf = append(buf, st.pollBuf...)
+		st.pollBuf = nil
+		st.pollBytes = 0
+		st.signal()
+	}
 	st.mu.Unlock()
-	st.signal()
+
 	if len(buf) == 0 {
 		w.WriteHeader(http.StatusNoContent)
 		return
