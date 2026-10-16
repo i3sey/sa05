@@ -156,4 +156,32 @@ class ProfileExplainersTest {
         assertEquals(1, offsetPacketAfterEnd.branchIndex)
         assertEquals(0.01f, offsetPacketAfterEnd.progress, 0.0001f)
     }
+
+    @Test
+    fun synthesizesBalancerWhenMultipleRemoteOutboundsPresentWithoutExplicitBalancerRule() {
+        val info = parseProfileRoute(
+            """
+            {
+              "outbounds":[
+                {
+                  "tag":"proxy-1",
+                  "protocol":"vless",
+                  "settings":{"vnext":[{"address":"1.example", "port":443}]},
+                  "streamSettings":{"network":"tcp", "security":"none"}
+                },
+                {
+                  "tag":"proxy-2",
+                  "protocol":"vless",
+                  "settings":{"vnext":[{"address":"2.example", "port":443}]},
+                  "streamSettings":{"network":"tcp", "security":"none"}
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(1, info.balancers.size)
+        assertEquals("auto", info.balancers.single().tag)
+        assertEquals(2, info.balancers.single().candidates.size)
+    }
 }

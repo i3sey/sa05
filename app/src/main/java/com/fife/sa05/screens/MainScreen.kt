@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,11 +54,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.fife.sa05.AppUpdateState
 import com.fife.sa05.BsProfile
 import com.fife.sa05.BsTraffic
 import com.fife.sa05.ConnectionCheckState
+import com.fife.sa05.ProfileExplainer
+import com.fife.sa05.R
 import com.fife.sa05.SubscriptionProfile
 import com.fife.sa05.SubscriptionState
 import com.fife.sa05.TelegramProxyRunStatus
@@ -68,7 +75,9 @@ import com.fife.sa05.VpnSecondaryAction
 import com.fife.sa05.formatTrafficBytes
 import com.fife.sa05.vpnStatusPresentation
 import com.fife.sa05.components.DashboardRow
+import com.fife.sa05.components.FlagBadge
 import com.fife.sa05.parseServerRemark
+import com.fife.sa05.ui.theme.clickableScale
 import com.fife.sa05.ui.theme.fadeTransform
 import com.fife.sa05.ui.theme.motionEnabled
 import com.fife.sa05.ui.theme.pressScale
@@ -111,6 +120,7 @@ internal fun ColumnScope.MainScreen(
     updateState: AppUpdateState,
     trafficUsage: TrafficUsage?,
     bsTraffic: BsTraffic.Snapshot,
+    excludedAppsCount: Int = 0,
     onSelectProfile: (String) -> Unit,
     onToggleVpn: () -> Unit,
     onStartTelegram: () -> Unit,
@@ -207,21 +217,102 @@ internal fun ColumnScope.MainScreen(
             }
         }
         item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
+            val serverRemark = parseServerRemark(subscription.activeProfile?.remarks.orEmpty())
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(
+                        bottom = if (subscription.activeProfile != null) 12.dp else 0.dp
+                    )
+                ) {
                     DashboardRow(
                         title = "Сервер",
-                        subtitle = parseServerRemark(subscription.activeProfile?.remarks.orEmpty())
-                            .name.ifBlank { "Сервер не выбран" },
+                        subtitle = serverRemark.name.ifBlank { "Сервер не выбран" },
+                        trailingFlag = serverRemark.flag,
                         onClick = { profileSheetVisible = true }
                     )
-                    androidx.compose.material3.HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                    DashboardRow(
-                        title = "Исключения приложений",
-                        subtitle = "Приложения с прямым доступом",
-                        onClick = onExclusions
+                    subscription.activeProfile?.let { activeProfile ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp)
+                        ) {
+                            ProfileExplainer(profile = activeProfile)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickableScale(onClick = onExclusions),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.size(42.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                painterResource(R.drawable.ic_vpn_tile),
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Исключения приложений",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            if (excludedAppsCount > 0) {
+                                "Исключено: $excludedAppsCount (прямой доступ)"
+                            } else {
+                                "Приложения, работающие в обход VPN"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    if (excludedAppsCount > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ) {
+                            Text(
+                                text = "$excludedAppsCount",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Icon(
+                        painterResource(R.drawable.ic_chevron_right),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -301,12 +392,30 @@ private fun ProfileChoice(
 ) {
     val remark = parseServerRemark(profile.remarks)
     ListItem(
-        headlineContent = { Text(remark.name.ifBlank { "Сервер" }) },
+        headlineContent = {
+            Text(
+                remark.name.ifBlank { "Сервер" },
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+            )
+        },
         supportingContent = {
             Text(if (selected) "Выбран" else profile.remarks)
         },
         leadingContent = {
-            if (selected) Icon(Icons.Default.CheckCircle, contentDescription = null)
+            if (!remark.flag.isNullOrBlank()) {
+                FlagBadge(remark.flag)
+            } else if (selected) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null)
+            }
+        },
+        trailingContent = {
+            if (selected) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
         },
         modifier = Modifier.clickable(onClick = onClick),
         colors = androidx.compose.material3.ListItemDefaults.colors(
@@ -421,16 +530,65 @@ private fun TelegramCard(
     onStop: () -> Unit,
     onOpen: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+        )
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text(runtime.title(), style = MaterialTheme.typography.titleMedium)
-            Text(
-                runtime.description(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.size(42.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            painterResource(R.drawable.ic_telegram),
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        runtime.title(),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        runtime.description(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (runtime.status == TelegramProxyRunStatus.RUNNING) {
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ) {
+                        Text(
+                            text = "Работает",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
             when (runtime.status) {
                 TelegramProxyRunStatus.RUNNING -> {
                     FilledTonalButton(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {

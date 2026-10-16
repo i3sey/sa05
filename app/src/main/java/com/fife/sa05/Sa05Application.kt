@@ -16,6 +16,7 @@ class Sa05Application : Application() {
         // Isolated diagnostics has no access to app storage or preferences.
         runCatching { VpnRuntimeState.clear(this) }
         runCatching { TelegramProxyRuntimeState.clear(this) }
+        runCatching { AppUpdateScheduler.sync(this) }
         applicationScope.launch {
             runCatching {
                 SubscriptionRefreshScheduler.sync(

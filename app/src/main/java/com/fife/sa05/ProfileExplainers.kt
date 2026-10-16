@@ -11,7 +11,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -110,30 +109,51 @@ internal fun parseProfileRoute(raw: String): ProfileRouteInfo {
         ?.objects()
         .orEmpty()
         .associateBy { it.optString("tag") }
-    val balancers = usedBalancerTags.mapNotNull { tag ->
+    val balancerTags = if (usedBalancerTags.isNotEmpty()) {
+        usedBalancerTags
+    } else {
+        configuredBalancers.keys.toList()
+    }
+    val balancers = balancerTags.mapNotNull { tag ->
         val balancer = configuredBalancers[tag] ?: return@mapNotNull null
         val selectors = balancer.optJSONArray("selector")
             ?.strings()
             .orEmpty()
             .filter(String::isNotBlank)
+        val candidates = remoteOutbounds.filter { outbound ->
+            outbound.tag.isNotBlank() && selectors.any(outbound.tag::startsWith)
+        }
         ProfileBalancerInfo(
             tag = tag,
             strategy = balancer.optJSONObject("strategy")
                 ?.optString("type", "random")
                 ?.ifBlank { "random" }
                 ?: "random",
-            candidates = remoteOutbounds.filter { outbound ->
-                outbound.tag.isNotBlank() && selectors.any(outbound.tag::startsWith)
-            },
+            candidates = candidates,
             fallbackTag = balancer.optString("fallbackTag")
                 .trim()
                 .takeIf(String::isNotEmpty)
         )
     }
 
+    val effectiveBalancers = if (balancers.isNotEmpty()) {
+        balancers
+    } else if (remoteOutbounds.size > 1) {
+        listOf(
+            ProfileBalancerInfo(
+                tag = "auto",
+                strategy = "leastPing",
+                candidates = remoteOutbounds,
+                fallbackTag = null
+            )
+        )
+    } else {
+        emptyList()
+    }
+
     return ProfileRouteInfo(
         primaryOutbound = primaryOutbound,
-        balancers = balancers
+        balancers = effectiveBalancers
     )
 }
 
@@ -176,13 +196,31 @@ internal fun ProfileExplainer(
     modifier: Modifier = Modifier
 ) {
     if (BsProfile.isBs(profile)) {
-        Text(
-            "Трафик через Yandex Cloud Functions (HTTPS poll) до origin VPS. " +
-                "Провайдерский outbound не используется.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = modifier
-        )
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            shape = RoundedCornerShape(20.dp),
+            modifier = modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text("Маршрут БС-туннеля", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "HTTPS poll через Yandex CDN к origin VPS",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                ProfileRouteAnimation(
+                    ProfileOutboundInfo(
+                        tag = "bs-tunnel",
+                        protocol = "YCTUN",
+                        transport = "HTTPS POLL",
+                        security = "TLS",
+                        endpoint = "dom.sa05.eu.cc:443"
+                    )
+                )
+            }
+        }
         return
     }
     val info = remember(profile.id, profile.json) {
@@ -243,7 +281,7 @@ private fun BalancerRouteCard(balancer: ProfileBalancerInfo) {
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(
-                "Балансер ${balancer.tag}",
+                "Автоматический выбор сервера",
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -251,26 +289,12 @@ private fun BalancerRouteCard(balancer: ProfileBalancerInfo) {
             Spacer(Modifier.height(2.dp))
             Text(
                 "${balancerStrategyLabel(balancer.strategy)} · " +
-                    "серверов: ${balancer.candidates.size}",
+                    "протоколов: ${balancer.candidates.size}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(10.dp))
             BalancerRouteAnimation(balancer)
-            if (balancer.fallbackTag != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Резервный маршрут: ${balancer.fallbackTag}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Анимация показывает варианты из конфига, а не активный сервер в реальном времени.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -550,47 +574,6 @@ private fun BalancerRouteAnimation(balancer: ProfileBalancerInfo) {
                 )
             }
         }
-        Spacer(Modifier.height(8.dp))
-        if (balancer.candidates.isEmpty()) {
-            Text(
-                "Selector не совпал ни с одним VPN outbound.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        } else {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                candidates.forEach { candidate ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f),
-                        shape = RoundedCornerShape(50)
-                    ) {
-                        Text(
-                            "${candidate.tag}: ${candidate.protocol}/${candidate.transport}/" +
-                                securityLabel(candidate.security),
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-                if (balancer.candidates.size > candidates.size) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f),
-                        shape = RoundedCornerShape(50)
-                    ) {
-                        Text(
-                            "+${balancer.candidates.size - candidates.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -633,7 +616,7 @@ private fun balancerStrategyLabel(strategy: String): String = when (strategy) {
     "random" -> "Случайный выбор"
     "roundRobin" -> "По очереди"
     "leastPing" -> "Минимальная задержка"
-    "leastLoad" -> "Минимальная нагрузка"
+    "leastLoad" -> "Распределение нагрузки"
     else -> strategy
 }
 

@@ -1236,7 +1236,9 @@ class XrayVpnService : VpnService() {
     private fun closeProcess(process: Process?) {
         if (process == null) return
         runCatching { process.destroy() }
-        runCatching { process.destroyForcibly() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching { process.destroyForcibly() }
+        }
         runCatching { process.inputStream.close() }
         runCatching { process.errorStream.close() }
         runCatching { process.outputStream.close() }

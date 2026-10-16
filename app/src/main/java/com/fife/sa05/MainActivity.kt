@@ -68,6 +68,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -78,9 +79,12 @@ data class InstalledApp(val label: String, val packageName: String)
 class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_REQUEST_VPN = "request_vpn"
+        const val EXTRA_NAVIGATE_TO = "navigate_to"
+        const val NAVIGATE_TO_SETTINGS = "settings"
     }
 
     private val pendingSubscriptionUrl = MutableStateFlow<String?>(null)
+    private val pendingScreen = MutableStateFlow<AppScreen?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,6 +93,7 @@ class MainActivity : ComponentActivity() {
             intent?.data = null
             pendingSubscriptionUrl.value = it
         }
+        consumeNavigateTo(intent)
         setContent {
             val preferences by produceState<XraySettings?>(initialValue = null) {
                 XrayPreferences.settings(this@MainActivity).collect { value = it }
@@ -104,6 +109,8 @@ class MainActivity : ComponentActivity() {
                     preferences = loadedPreferences,
                     subscriptionImport = pendingSubscriptionUrl,
                     onSubscriptionImportConsumed = { pendingSubscriptionUrl.value = null },
+                    pendingScreen = pendingScreen,
+                    onScreenConsumed = { pendingScreen.value = null },
                     onDynamicColorChanged = {
                         lifecycleScope.launch {
                             XrayPreferences.saveDynamicColor(this@MainActivity, it)
@@ -124,9 +131,17 @@ class MainActivity : ComponentActivity() {
 
     private fun consumeIntent(intent: Intent?) {
         consumeVpnRequest(intent)
+        consumeNavigateTo(intent)
         SubscriptionDeepLink.parse(intent?.dataString)?.let {
             intent?.data = null
             pendingSubscriptionUrl.value = it
+        }
+    }
+
+    private fun consumeNavigateTo(intent: Intent?) {
+        if (intent?.getStringExtra(EXTRA_NAVIGATE_TO) == NAVIGATE_TO_SETTINGS) {
+            intent.removeExtra(EXTRA_NAVIGATE_TO)
+            pendingScreen.value = AppScreen.SETTINGS
         }
     }
 
@@ -290,8 +305,10 @@ private fun requestIgnoreBatteryOptimizations(context: Context) {
 private fun XrayScreen(
     apps: List<InstalledApp>,
     preferences: XraySettings,
-    subscriptionImport: MutableStateFlow<String?>,
+    subscriptionImport: StateFlow<String?>,
     onSubscriptionImportConsumed: () -> Unit,
+    pendingScreen: StateFlow<AppScreen?>,
+    onScreenConsumed: () -> Unit,
     onDynamicColorChanged: (Boolean) -> Unit,
     requestStart: () -> Unit
 ) {
@@ -301,6 +318,13 @@ private fun XrayScreen(
     var urlDraft by remember { mutableStateOf(subscription.url) }
     var selectedApps by remember { mutableStateOf(preferences.excludedApps) }
     var screen by remember { mutableStateOf(AppScreen.MAIN) }
+    val targetScreen by pendingScreen.collectAsState()
+    LaunchedEffect(targetScreen) {
+        targetScreen?.let {
+            screen = it
+            onScreenConsumed()
+        }
+    }
     var message by remember { mutableStateOf("") }
     var subscriptionError by remember { mutableStateOf<String?>(null) }
     var importedSubscription by remember { mutableStateOf<SubscriptionState?>(null) }
@@ -350,7 +374,20 @@ private fun XrayScreen(
     val backendState = vpnRuntime.status
     val snackbarHostState = remember { SnackbarHostState() }
     val authorized = SubscriptionAuth.isAuthorized(subscription)
-    var updateState by remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
+    var updateState by remember {
+        val cached = AppUpdatePreferences.getLastAvailableRelease(context)
+        val initial = if (cached != null && AppUpdateRepository.isNewer(
+                BuildConfig.VERSION_CODE,
+                BuildConfig.VERSION_NAME,
+                cached
+            )
+        ) {
+            AppUpdateState.Available(cached)
+        } else {
+            AppUpdateState.Idle
+        }
+        mutableStateOf<AppUpdateState>(initial)
+    }
     var updateDownloadSession by remember { mutableStateOf(0L) }
     var updateDownloadJob by remember { mutableStateOf<Job?>(null) }
     var telegramStartRequested by remember { mutableStateOf(false) }
@@ -549,6 +586,15 @@ private fun XrayScreen(
                 AppUpdateState.Error(e.message ?: e.javaClass.simpleName)
             }
             updateState = result
+            when (result) {
+                is AppUpdateState.Available -> {
+                    AppUpdateNotification.notifyIfNew(context, result.release)
+                }
+                AppUpdateState.UpToDate -> {
+                    AppUpdateNotification.onUpToDate(context)
+                }
+                else -> Unit
+            }
             if (!silent && notify && result is AppUpdateState.Available) {
                 message = "Доступна версия ${result.release.versionName}"
             } else if (!silent && !notify) {
@@ -567,6 +613,7 @@ private fun XrayScreen(
             message = "Обновление уже скачивается"
             return
         }
+        AppUpdateNotification.cancel(context)
         val sessionId = ++updateDownloadSession
         updateDownloadJob = scope.launch {
             updateState = AppUpdateState.Available(release, downloadProgress = 0)
@@ -608,6 +655,7 @@ private fun XrayScreen(
     }
 
     fun installDownloadedUpdate(path: String) {
+        AppUpdateNotification.cancel(context)
         val file = java.io.File(path)
         if (!file.exists()) {
             updateState = AppUpdateState.Error("APK не найден")
@@ -826,6 +874,7 @@ private fun XrayScreen(
                     updateState = updateState,
                     trafficUsage = trafficUsage,
                     bsTraffic = bsTraffic,
+                    excludedAppsCount = preferences.excludedApps.size,
                     onSelectProfile = { id ->
                         when (
                             profileSwitchAction(
